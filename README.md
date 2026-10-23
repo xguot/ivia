@@ -10,21 +10,21 @@ There are no persistent toolbars, buffer tabs, or scrollbars. A quiet last row
 shows the current filename relative to Ivia's working directory, page position,
 and zoom. Press `:`, `/`, or `?` and that same row becomes the command or search
 line; Enter or Escape restores the status without moving the paper. Both use a
-12-pixel horizontal inset and the same neutral surface, without a box or border.
-Tab completion appears just above the row when needed. Contents and marks use
+12-pixel horizontal inset and share the canvas background, without a solid bar,
+box, or border. Tab completion appears just above the row when needed. Contents and marks use
 optional panels; buffer lists use Vim-style command output above the last row.
 `Ctrl+G` or `:info` briefly shows filename, page and zoom. Other notices also
 disappear automatically.
 
 The previous iris palette has been removed. Light mode takes its canvas and
 base grays from Sioyek's shipped defaults; dark mode takes its base grays from
-Zathura's defaults. The shared status/command row uses a neutral surface:
+Zathura's defaults. The status/command row shares the canvas surface:
 
 | Element | Light (`:set light`) | Dark (`:set dark`) |
 | --- | --- | --- |
-| Canvas | RGB 0.97, 0.97, 0.97 (approximately `#f7f7f7`) | `#000000` |
-| Status / command background | `#ffffff` | `#232323` |
-| Command input text | `#000000` | `#dddddd` |
+| Canvas & status / command row | RGB 0.97, 0.97, 0.97 (approximately `#f7f7f7`) | `#000000` |
+| Panels & command popups | `#ffffff` | `#232323` |
+| Status & command text | `#000000` | `#dddddd` |
 
 Sources: [Sioyek prefs.config](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/prefs.config),
 [Sioyek main.cpp](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/main.cpp), and

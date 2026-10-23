@@ -307,17 +307,17 @@ void MainWindow::applyTheme()
         #brand { font-family: Georgia; font-size: 38px; color: %5; }
         #welcomeOpen { color: %1; }
         #welcomeHint { color: %2; font-size: 11px; }
-        #bottomLine, #statusLine, #promptBar { background: %3; border: 0; border-radius: 0; }
+        #bottomLine, #statusLine, #promptBar { background: %6; border: 0; border-radius: 0; }
         #statusFile, #statusPosition, #pendingKeys, #notice, #hitEnter, #commandOutput {
-            font-family: Menlo, Consolas, monospace; font-size: 12px; color: %1; background: %3; border: 0;
+            font-family: Menlo, Consolas, monospace; font-size: 13px; color: %1; background: %6; border: 0;
         }
         #statusPosition { color: %2; }
         #notice, #hitEnter { padding: 0 12px; }
         #hitEnter { color: %2; }
-        #commandOutput { background: %3; }
+        #commandOutput { background: %3; border-top: 1px solid %4; border-bottom: 1px solid %4; }
         #promptPrefix, #commandLine, #completionList { padding: 0; margin: 0; font-family: Menlo, Consolas, monospace; font-size: 13px; background: transparent; border: 0; }
         #promptPrefix { color: %1; }
-        #completionList { color: %1; background: %3; border: 0; padding: 6px 12px; }
+        #completionList { color: %1; background: %3; border-top: 1px solid %4; border-bottom: 1px solid %4; padding: 6px 12px; }
         #commandLine { color: %1; selection-background-color: #dddddd; selection-color: #000000; }
         #panel { background: %3; border-right: 1px solid %4; }
         #panelTitle { font-size: 10px; font-weight: 500; letter-spacing: 1px; color: %2; }
