@@ -85,7 +85,8 @@ a count: `8j`, `3J`, `12G`, `2gg`, `4n`.
 | `Ctrl+F`, `Ctrl+B`, `Space` | Screen down / up / down |
 | `gg`, `G`, `12G` | First page, last page, page 12 |
 | `J`, `K` | Next / previous physical page |
-| `+`, `-`, `0` | Zoom in, zoom out, fit width |
+| `-`, `+`, `=` | Zoom out, zoom in |
+| `W`, `H` | Fit page width, fit page height |
 | `zi`, `zo`, `za`, `zz` | Zoom in, out, fit width, fit page |
 | `/text`, `?text` + Enter | Search forward / backward |
 | `n`, `N` | Next / previous search result, with wraparound |
@@ -96,7 +97,8 @@ a count: `8j`, `3J`, `12G`, `2gg`, `4n`.
 | `ma`, `'a` | Set mark a, return to mark a |
 | `gt`, `gT` | Next / previous buffer |
 | `t` | Toggle the document contents |
-| `y` | Copy mouse-selected text |
+| `Ctrl+Shift+Space` | Toggle Alacritty-style Vi copy mode (`h j k l`, `w b e`, `0 ^ $`, `v V`, `y`) |
+| `y` | Copy selected text |
 | `:` | Open the command prompt |
 | `Ctrl+G` | Briefly show filename, page and zoom |
 
@@ -213,7 +215,7 @@ PDF only. Text search and reference inference require an existing text layer;
 there is no OCR. Numbered reference lookup is a heuristic, not a semantic citation
 resolver. It can mistake a numbered list for a bibliography and does not infer
 author–year references. PDF links are preferable when present. Text selection is
-mouse-driven and currently stays within one page. The dark theme changes the
+available via Vi copy mode (`Ctrl+Shift+Space`) or the mouse and stays within one page. The dark theme changes the
 interface; it preserves the original paper colors. Annotation editing, automatic
 file watching, split views, and key remapping are not implemented.
 

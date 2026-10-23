@@ -417,6 +417,7 @@ ReaderView *MainWindow::createView(QPdfDocument *document)
     connect(view, &ReaderView::searchChanged, this, &MainWindow::updateStatus);
     connect(view, &ReaderView::message, this, &MainWindow::showMessage);
     connect(view, &ReaderView::hintsChanged, this, &MainWindow::updateStatus);
+    connect(view, &ReaderView::viModeChanged, this, &MainWindow::updateStatus);
     connect(view, &ReaderView::previewRequested, this, &MainWindow::preview);
     connect(view, &ReaderView::externalLinkRequested, this, [this](const QUrl &url) {
         if (url.scheme() != "https" && url.scheme() != "http" && url.scheme() != "mailto") {
@@ -433,7 +434,7 @@ void MainWindow::switchBuffer(int index)
     if (index < 0 || index >= bufferCount()) return;
     if (m_waitingForEnter) dismissOutput();
     resetPending();
-    if (reader()) reader()->cancelHints();
+    if (reader()) { reader()->cancelHints(); reader()->exitViMode(); }
     if (buffer() && index != m_active) m_alternatePath = buffer()->path;
     m_active = index;
     m_bufferVisits.removeAll(buffer()->path);
@@ -532,7 +533,9 @@ QString MainWindow::bufferName(const Buffer *item) const
 
 void MainWindow::updateStatus()
 {
-    m_pendingLabel->setText(m_count + m_pending);
+    const QString seq = m_count + m_pending;
+    const QString mode = reader() ? reader()->viModeLabel() : QString{};
+    m_pendingLabel->setText(mode.isEmpty() ? seq : (seq.isEmpty() ? mode : mode + "  " + seq));
     QString filename = "[No PDF]";
     QString position;
     if (buffer()) {
@@ -875,7 +878,7 @@ bool MainWindow::executeCommand(const QString &text)
     }
     if (name == "fit") {
         if (argument.isEmpty() || argument == "width") reader()->fitWidth();
-        else if (argument == "page") reader()->fitPage();
+        else if (argument == "page" || argument == "height") reader()->fitPage();
         else { showMessage("Usage: :fit width | page"); return false; }
         return true;
     }
@@ -971,19 +974,63 @@ void MainWindow::normalKey(QKeyEvent *event)
     event->ignore();
     auto accept = [event] { event->accept(); };
     auto *view = reader();
+    const auto modifiers = event->modifiers();
+    if (CommandLine::physicalControl(modifiers & ~Qt::ShiftModifier)
+            && (modifiers & Qt::ShiftModifier) && event->key() == Qt::Key_Space) {
+        resetPending();
+        if (view) view->toggleViMode();
+        updateStatus();
+        accept();
+        return;
+    }
     if (event->key() == Qt::Key_Escape) {
+        if (!m_pending.isEmpty() || !m_count.isEmpty()) {
+            resetPending(); updateStatus(); accept(); return;
+        }
+        if (view && view->viMode()) {
+            view->handleViKey(event->key(), modifiers, event->text());
+            updateStatus(); accept(); return;
+        }
         resetPending(); if (view) { view->cancelHints(); view->clearSelection(); }
         m_panel->hide(); m_messageTimer.stop(); m_messageLabel->hide(); updateStatus(); accept(); return;
     }
-    const auto modifiers = event->modifiers();
     if (modifiers & Qt::AltModifier) return;
     if (view && event->matches(QKeySequence::Copy)) {
         view->copySelection(); accept(); return;
+    }
+    const QString text = event->text();
+    if (view && view->hinting()) { if (!text.isEmpty()) view->hintKey(text); accept(); return; }
+    if (view && view->viMode() && (text == ":" || text == "/" || text == "?")) {
+        enterPrompt(text.at(0)); accept(); return;
+    }
+    if (view && view->viMode() && (m_pending == "m" || m_pending == "'") && text.size() == 1) {
+        if (text.at(0).isLetter()) {
+            if (m_pending == "m") setMark(text.at(0)); else jumpMark(text.at(0));
+        }
+        resetPending(); accept(); return;
+    }
+    if (view && view->viMode() && !(modifiers & (Qt::ControlModifier | Qt::MetaModifier))) {
+        if (text.size() == 1 && text.front().isDigit() && (text != "0" || !m_count.isEmpty())) {
+            if (m_count.size() < 4) m_count += text;
+            updateStatus(); accept(); return;
+        }
+        const int count = m_count.isEmpty() ? 1 : std::clamp(m_count.toInt(), 1, 9999);
+        if (m_pending.isEmpty() && (text == "g" || text == "m" || text == "'")) {
+            m_pending = text; updateStatus(); accept(); return;
+        }
+        const QString pending = m_pending;
+        resetPending();
+        if (view->handleViKey(event->key(), modifiers, text, count, pending)) {
+            updateStatus(); accept(); return;
+        }
     }
     if (CommandLine::physicalControl(modifiers)) {
         const int key = event->key();
         if (!view) return;
         int count = m_count.isEmpty() ? 1 : m_count.toInt();
+        if (view->viMode() && view->handleViKey(key, modifiers, text, count)) {
+            resetPending(); updateStatus(); accept(); return;
+        }
         bool handled = true;
         if (key == Qt::Key_D) view->scrollBy(0, view->viewport()->height() / 2 * count);
         else if (key == Qt::Key_U) view->scrollBy(0, -view->viewport()->height() / 2 * count);
@@ -998,8 +1045,6 @@ void MainWindow::normalKey(QKeyEvent *event)
         return;
     }
     if (modifiers & (Qt::ControlModifier | Qt::MetaModifier)) return;
-    const QString text = event->text();
-    if (view && view->hinting()) { if (!text.isEmpty()) view->hintKey(text); accept(); return; }
     if (text == ":" || text == "/" || text == "?") { enterPrompt(text.at(0)); accept(); return; }
     if (text.isEmpty()) return;
     if ((m_pending == "m" || m_pending == "'") && text.size() == 1) {
@@ -1051,7 +1096,8 @@ void MainWindow::normalKey(QKeyEvent *event)
     else if (text == "y") view->copySelection();
     else if (text == "+" || text == "=") view->setZoom(view->zoom() * std::pow(1.15, count));
     else if (text == "-") view->setZoom(view->zoom() / std::pow(1.15, count));
-    else if (text == "0") view->fitWidth();
+    else if (text == "W") view->fitWidth();
+    else if (text == "H") view->fitPage();
     else if (text == "t") showPanel("toc");
     else handled = false;
     resetPending();
@@ -1161,7 +1207,8 @@ void MainWindow::showHelp()
     <tr><td><code>Ctrl+F / Ctrl+B</code></td><td>Full page down / up. Space also moves down.</td></tr>
     <tr><td><code>gg / G / 12G</code></td><td>First page / last page / page 12</td></tr>
     <tr><td><code>J / K</code></td><td>Next / previous page</td></tr>
-    <tr><td><code>+ / − / 0</code></td><td>Zoom in / out / fit width</td></tr>
+    <tr><td><code>- / + / =</code></td><td>Zoom out / zoom in</td></tr>
+    <tr><td><code>W / H</code></td><td>Fit page width / fit page height</td></tr>
     <tr><td><code>zi / zo / za / zz</code></td><td>Zoom in / out / fit width / fit page</td></tr></table>
     <h2>Find, follow, return</h2><table>
     <tr><td><code>/text / ?text</code></td><td>Search forward / backward; Enter commits</td></tr>
@@ -1171,7 +1218,8 @@ void MainWindow::showHelp()
     <tr><td><code>gd / :ref 12</code></td><td>Look up a selected numbered citation / reference 12</td></tr>
     <tr><td><code>Ctrl+O / Ctrl+I</code></td><td>Back / forward through jumps</td></tr>
     <tr><td><code>ma / 'a</code></td><td>Set / return to mark a (saved for each paper)</td></tr>
-    <tr><td><code>y</code></td><td>Copy mouse-selected text</td></tr></table>
+    <tr><td><code>Ctrl+Shift+Space</code></td><td>Toggle Vi copy mode (<code>h j k l w b e 0 $ v V y</code>)</td></tr>
+    <tr><td><code>y</code></td><td>Copy selected text</td></tr></table>
     <h2>The command line</h2><table>
     <tr><td><code>:e path/to/file.pdf</code></td><td>Open a PDF; spaces, quotes and ~/ work</td></tr>
     <tr><td><code>:b name / :b Tab</code></td><td>Switch buffers by relative filename; Tab chooses. Also gt / gT.</td></tr>

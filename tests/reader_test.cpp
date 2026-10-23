@@ -128,6 +128,22 @@ private slots:
         QTest::keyClicks(prompt, "zoom 125");
         QTest::keyClick(prompt, Qt::Key_Return);
         QCOMPARE(view->zoom(), 1.25);
+        QVERIFY(!view->fitsWidth());
+        QTest::keyClicks(view, "0"); // 0 is not a normal-mode fit shortcut
+        QCOMPARE(view->zoom(), 1.25);
+        QVERIFY(!view->fitsWidth());
+        QTest::keyClicks(view, "W");
+        QVERIFY(view->fitsWidth());
+        const qreal widthZoom = view->zoom();
+        QTest::keyClicks(view, "H");
+        QVERIFY(!view->fitsWidth());
+        QVERIFY(view->zoom() != widthZoom);
+        QTest::keyClicks(view, "=");
+        QVERIFY(view->zoom() > 0.1);
+        QTest::keyClicks(view, "-");
+        QTest::keyClicks(view, "+");
+        QTest::keyClicks(view, "W");
+        QVERIFY(view->fitsWidth());
         QVERIFY(!prompt->isVisible());
         QTest::keyClicks(view, ":");
         QTest::keyClick(prompt, Qt::Key_Up);
@@ -600,6 +616,32 @@ private slots:
         view->setZoom(0.7);
         QTest::keyClicks(view, "'z");
         QCOMPARE(view->zoom(), 1.2);
+
+        // Alacritty-style Vi copy mode via Ctrl+Shift+Space.
+        view->jump(0);
+        auto *pending = window.findChild<QLabel *>("pendingKeys");
+        QVERIFY(!view->viMode());
+        QTest::keyClick(view, Qt::Key_Space, vimControl | Qt::ShiftModifier);
+        QVERIFY(view->viMode());
+        QCOMPARE(pending->text(), "-- VI --");
+        QTest::keyClicks(view, "0v8l");
+        QVERIFY(view->viSelecting());
+        QCOMPARE(pending->text(), "-- VISUAL --");
+        QVERIFY(view->selectedText().startsWith("Attention"));
+        QApplication::clipboard()->clear();
+        QTest::keyClicks(view, "y");
+        QCOMPARE(QApplication::clipboard()->text(), "Attention");
+        QVERIFY(view->viMode());
+        QVERIFY(!view->viSelecting());
+        QCOMPARE(pending->text(), "-- VI --");
+        QTest::keyClicks(view, "V");
+        QCOMPARE(pending->text(), "-- VISUAL LINE --");
+        QTest::keyClick(view, Qt::Key_Escape);
+        QVERIFY(view->viMode());
+        QVERIFY(!view->viSelecting());
+        QTest::keyClick(view, Qt::Key_Space, vimControl | Qt::ShiftModifier);
+        QVERIFY(!view->viMode());
+        QCOMPARE(pending->text(), "");
     }
     void searchWrapAndCancellation() {
         MainWindow window;

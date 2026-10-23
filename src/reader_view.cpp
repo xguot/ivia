@@ -1,4 +1,5 @@
 #include "reader_view.h"
+#include "command_line.h"
 #include "theme.h"
 #include <QApplication>
 #include <QClipboard>
@@ -297,6 +298,14 @@ void ReaderView::paintEvent(QPaintEvent *)
             painter.setBrush(colors.selectionHighlight);
             for (const auto &bound : m_selection->bounds()) painter.drawPolygon(bound);
         }
+        if (m_viMode && m_viPage == page) {
+            const QRectF caret = viCharRect(page, m_viIndex);
+            if (!caret.isEmpty()) {
+                painter.setPen(QPen(Qt::black, 1.0 / m_zoom));
+                painter.setBrush(QColor(0, 0, 0, 115));
+                painter.drawRect(caret);
+            }
+        }
         painter.restore();
     }
     requestVisibleRasters();
@@ -349,6 +358,7 @@ void ReaderView::mousePressEvent(QMouseEvent *event)
     if (event->button() != Qt::LeftButton) return;
     setFocus();
     cancelHints();
+    if (m_viMode) exitViMode();
     clearSelection();
     m_press = hitTest(event->position());
     m_hover = m_press;
@@ -460,6 +470,23 @@ void ReaderView::selectMatch(int index)
     m_match = index;
     const auto &result = m_hits.at(index);
     jump(result.page, QPointF(0, std::max(0.0, result.point.y() - 90)));
+    if (m_viMode) {
+        ensurePageText(result.page);
+        if (!m_viText.isEmpty() && !m_searchText.isEmpty()) {
+            qsizetype pos = 0;
+            int best = m_viIndex;
+            qreal bestDist = 1e9;
+            while ((pos = m_viText.indexOf(m_searchText, pos, Qt::CaseInsensitive)) >= 0) {
+                const auto rect = viCharRect(result.page, int(pos));
+                const qreal dist = (rect.topLeft() - result.point).manhattanLength();
+                if (dist < bestDist) { bestDist = dist; best = int(pos); }
+                pos += std::max(qsizetype(1), m_searchText.size());
+            }
+            m_viPage = result.page;
+            m_viIndex = best;
+            updateViSelection();
+        }
+    }
     viewport()->update();
     emit searchChanged();
 }
@@ -483,6 +510,341 @@ void ReaderView::clearSearch()
     m_match = -1;
     viewport()->update();
     emit searchChanged();
+}
+
+void ReaderView::ensurePageText(int page)
+{
+    page = std::clamp(page, 0, std::max(0, m_document->pageCount() - 1));
+    if (m_viTextPage == page) return;
+    m_viTextPage = page;
+    m_viText = m_document->getAllText(page).text();
+    m_viLines.clear();
+    int start = 0;
+    for (int i = 0; i < m_viText.size(); ++i) {
+        if (m_viText.at(i) == '\n') {
+            int end = i;
+            if (end > start && m_viText.at(end - 1) == '\r') --end;
+            m_viLines.append({start, std::max(start, end - 1)});
+            start = i + 1;
+        }
+    }
+    if (start < m_viText.size() || m_viLines.isEmpty()) {
+        int end = int(m_viText.size()) - 1;
+        if (end >= start && m_viText.at(end) == '\r') --end;
+        m_viLines.append({start, std::max(start, end)});
+    }
+}
+
+QRectF ReaderView::viCharRect(int page, int index) const
+{
+    if (page < 0 || page >= m_document->pageCount()) return {};
+    const auto text = page == m_viTextPage ? m_viText : m_document->getAllText(page).text();
+    if (text.isEmpty()) return QRectF(72, 72, 8, 14);
+    index = std::clamp(index, 0, int(text.size()) - 1);
+    for (int step = 0; step < 32; ++step) {
+        for (int sign : {1, -1}) {
+            const int candidate = index + step * sign;
+            if (candidate < 0 || candidate >= text.size()) continue;
+            if (text.at(candidate).isSpace()) continue;
+            const auto sel = m_document->getSelectionAtIndex(page, candidate, 1);
+            const auto rect = sel.boundingRectangle();
+            if (!rect.isEmpty()) {
+                if (candidate == index) return rect;
+                const qreal width = std::clamp(rect.width(), 5.0, 12.0);
+                return QRectF(rect.x() + (index - candidate) * width * 0.6, rect.y(), width, rect.height());
+            }
+        }
+    }
+    return QRectF(72, 72, 8, 14);
+}
+
+void ReaderView::updateViSelection()
+{
+    if (!m_viMode || m_viSelect == ViSelect::None || m_viAnchor < 0) {
+        m_selection.reset();
+        m_selectionPage = -1;
+        viewport()->update();
+        return;
+    }
+    ensurePageText(m_viPage);
+    if (m_viText.isEmpty()) return;
+    int first = std::min(m_viAnchor, m_viIndex);
+    int last = std::max(m_viAnchor, m_viIndex);
+    if (m_viSelect == ViSelect::Line) {
+        for (const auto &line : std::as_const(m_viLines)) {
+            if (first >= line.first && first <= line.second + 1) first = line.first;
+            if (last >= line.first && last <= line.second + 1) last = line.second;
+        }
+    }
+    first = std::clamp(first, 0, int(m_viText.size()) - 1);
+    last = std::clamp(last, first, int(m_viText.size()) - 1);
+    m_selectionPage = m_viPage;
+    m_selection = m_document->getSelectionAtIndex(m_viPage, first, last - first + 1);
+    viewport()->update();
+}
+
+void ReaderView::ensureViCursorVisible()
+{
+    if (!m_viMode || m_pages.isEmpty()) return;
+    const QRectF page = pageRect(m_viPage);
+    const QRectF caret = viCharRect(m_viPage, m_viIndex);
+    const QRectF onCanvas(page.topLeft() + caret.topLeft() * m_zoom, caret.size() * m_zoom);
+    const qreal top = verticalScrollBar()->value();
+    const qreal bottom = top + viewport()->height();
+    const qreal pad = 36.0;
+    if (onCanvas.top() < top + pad)
+        verticalScrollBar()->setValue(qRound(std::max(0.0, onCanvas.top() - pad)));
+    else if (onCanvas.bottom() > bottom - pad)
+        verticalScrollBar()->setValue(qRound(onCanvas.bottom() - viewport()->height() + pad));
+    viewport()->update();
+    emit positionChanged();
+}
+
+void ReaderView::moveViVertical(int deltaLines)
+{
+    ensurePageText(m_viPage);
+    int lineIdx = 0;
+    for (int i = 0; i < m_viLines.size(); ++i) {
+        if (m_viIndex <= m_viLines.at(i).second + 1) { lineIdx = i; break; }
+        lineIdx = i;
+    }
+    const int column = m_viLines.isEmpty() ? 0 : std::max(0, m_viIndex - m_viLines.at(lineIdx).first);
+    int targetLine = lineIdx + deltaLines;
+    while (targetLine < 0 && m_viPage > 0) {
+        --m_viPage;
+        ensurePageText(m_viPage);
+        targetLine += std::max(1, int(m_viLines.size()));
+    }
+    while (targetLine >= m_viLines.size() && m_viPage + 1 < m_document->pageCount()) {
+        targetLine -= std::max(1, int(m_viLines.size()));
+        ++m_viPage;
+        ensurePageText(m_viPage);
+    }
+    if (m_viLines.isEmpty()) { m_viIndex = 0; return; }
+    targetLine = std::clamp(targetLine, 0, int(m_viLines.size()) - 1);
+    const auto &line = m_viLines.at(targetLine);
+    m_viIndex = std::min(line.first + column, line.second);
+}
+
+void ReaderView::toggleViMode()
+{
+    if (m_viMode) { exitViMode(); return; }
+    cancelHints();
+    m_viMode = true;
+    m_viSelect = ViSelect::None;
+    m_viAnchor = -1;
+    m_viPage = currentPage();
+    ensurePageText(m_viPage);
+    m_viIndex = 0;
+    const qreal targetY = (verticalScrollBar()->value() - pageRect(m_viPage).y()) / m_zoom + 24.0;
+    for (const auto &line : std::as_const(m_viLines)) {
+        const auto rect = viCharRect(m_viPage, line.first);
+        if (rect.bottom() >= std::max(0.0, targetY)) { m_viIndex = line.first; break; }
+    }
+    ensureViCursorVisible();
+    viewport()->update();
+    emit viModeChanged(true);
+}
+
+void ReaderView::exitViMode()
+{
+    if (!m_viMode) return;
+    m_viMode = false;
+    m_viSelect = ViSelect::None;
+    m_viAnchor = -1;
+    clearSelection();
+    viewport()->update();
+    emit viModeChanged(false);
+}
+
+QString ReaderView::viModeLabel() const
+{
+    if (!m_viMode) return {};
+    if (m_viSelect == ViSelect::Line) return "-- VISUAL LINE --";
+    if (m_viSelect == ViSelect::Normal) return "-- VISUAL --";
+    return "-- VI --";
+}
+
+bool ReaderView::handleViKey(int key, Qt::KeyboardModifiers modifiers, const QString &text, int count, const QString &pending)
+{
+    if (!m_viMode) return false;
+    ensurePageText(m_viPage);
+    auto currentLineIndex = [&]() {
+        for (int i = 0; i < m_viLines.size(); ++i)
+            if (m_viIndex <= m_viLines.at(i).second + 1) return i;
+        return std::max(0, int(m_viLines.size()) - 1);
+    };
+    auto isWord = [](QChar ch) { return ch.isLetterOrNumber() || ch.isMark() || ch == '_'; };
+
+    if (key == Qt::Key_Escape) {
+        if (m_viSelect != ViSelect::None) {
+            m_viSelect = ViSelect::None;
+            m_viAnchor = -1;
+            clearSelection();
+            emit viModeChanged(true);
+        } else {
+            exitViMode();
+        }
+        return true;
+    }
+    if (CommandLine::physicalControl(modifiers)) {
+        if (key == Qt::Key_C) { exitViMode(); return true; }
+        if (key == Qt::Key_E) { scrollBy(0, 24 * count); return true; }
+        if (key == Qt::Key_Y) { scrollBy(0, -24 * count); return true; }
+        if (key == Qt::Key_D) { moveViVertical(10 * count); ensureViCursorVisible(); updateViSelection(); return true; }
+        if (key == Qt::Key_U) { moveViVertical(-10 * count); ensureViCursorVisible(); updateViSelection(); return true; }
+        if (key == Qt::Key_F) { moveViVertical(20 * count); ensureViCursorVisible(); updateViSelection(); return true; }
+        if (key == Qt::Key_B) { moveViVertical(-20 * count); ensureViCursorVisible(); updateViSelection(); return true; }
+        return false;
+    }
+    if (!pending.isEmpty()) {
+        const QString seq = pending + text;
+        if (seq == "gg") {
+            m_viPage = count > 1 ? std::clamp(count - 1, 0, m_document->pageCount() - 1) : 0;
+            ensurePageText(m_viPage);
+            m_viIndex = 0;
+            ensureViCursorVisible();
+            updateViSelection();
+            return true;
+        }
+        if (seq == "gd" || seq == "gp") {
+            followReference(seq == "gp");
+            return true;
+        }
+        if (seq == "zz") {
+            const auto rect = viCharRect(m_viPage, m_viIndex);
+            verticalScrollBar()->setValue(qRound(pageRect(m_viPage).y() + rect.center().y() * m_zoom - viewport()->height() / 2.0));
+            return true;
+        }
+        return false;
+    }
+
+    if (key == Qt::Key_Left || text == "h") {
+        m_viIndex = std::max(0, m_viIndex - count);
+    } else if (key == Qt::Key_Right || text == "l") {
+        m_viIndex = std::min(std::max(0, int(m_viText.size()) - 1), m_viIndex + count);
+    } else if (key == Qt::Key_Down || text == "j") {
+        moveViVertical(count);
+    } else if (key == Qt::Key_Up || text == "k") {
+        moveViVertical(-count);
+    } else if (key == Qt::Key_Home || text == "0") {
+        if (!m_viLines.isEmpty()) m_viIndex = m_viLines.at(currentLineIndex()).first;
+    } else if (text == "^") {
+        if (!m_viLines.isEmpty()) {
+            const auto &line = m_viLines.at(currentLineIndex());
+            int pos = line.first;
+            while (pos < line.second && m_viText.at(pos).isSpace()) ++pos;
+            m_viIndex = pos;
+        }
+    } else if (key == Qt::Key_End || text == "$") {
+        if (!m_viLines.isEmpty()) m_viIndex = m_viLines.at(currentLineIndex()).second;
+    } else if (text == "w" || text == "W") {
+        const bool big = text == "W";
+        for (int c = 0; c < count; ++c) {
+            const int n = m_viText.size();
+            if (m_viIndex >= n - 1) break;
+            if (!big && !m_viText.at(m_viIndex).isSpace()) {
+                const bool w = isWord(m_viText.at(m_viIndex));
+                while (m_viIndex < n - 1 && !m_viText.at(m_viIndex).isSpace() && isWord(m_viText.at(m_viIndex)) == w) ++m_viIndex;
+            } else if (big) {
+                while (m_viIndex < n - 1 && !m_viText.at(m_viIndex).isSpace()) ++m_viIndex;
+            }
+            while (m_viIndex < n - 1 && m_viText.at(m_viIndex).isSpace()) ++m_viIndex;
+        }
+    } else if (text == "b" || text == "B") {
+        const bool big = text == "B";
+        for (int c = 0; c < count; ++c) {
+            if (m_viIndex <= 0) break;
+            --m_viIndex;
+            while (m_viIndex > 0 && m_viText.at(m_viIndex).isSpace()) --m_viIndex;
+            if (!big) {
+                const bool w = isWord(m_viText.at(m_viIndex));
+                while (m_viIndex > 0 && !m_viText.at(m_viIndex - 1).isSpace() && isWord(m_viText.at(m_viIndex - 1)) == w) --m_viIndex;
+            } else {
+                while (m_viIndex > 0 && !m_viText.at(m_viIndex - 1).isSpace()) --m_viIndex;
+            }
+        }
+    } else if (text == "e" || text == "E") {
+        const bool big = text == "E";
+        for (int c = 0; c < count; ++c) {
+            const int n = m_viText.size();
+            if (m_viIndex >= n - 1) break;
+            ++m_viIndex;
+            while (m_viIndex < n - 1 && m_viText.at(m_viIndex).isSpace()) ++m_viIndex;
+            if (!big) {
+                const bool w = isWord(m_viText.at(m_viIndex));
+                while (m_viIndex < n - 1 && !m_viText.at(m_viIndex + 1).isSpace() && isWord(m_viText.at(m_viIndex + 1)) == w) ++m_viIndex;
+            } else {
+                while (m_viIndex < n - 1 && !m_viText.at(m_viIndex + 1).isSpace()) ++m_viIndex;
+            }
+        }
+    } else if (text == "H") {
+        if (!m_viLines.isEmpty()) m_viIndex = m_viLines.first().first;
+    } else if (text == "M") {
+        if (!m_viLines.isEmpty()) m_viIndex = m_viLines.at(m_viLines.size() / 2).first;
+    } else if (text == "L") {
+        if (!m_viLines.isEmpty()) m_viIndex = m_viLines.last().first;
+    } else if (text == "G") {
+        m_viPage = count > 1 ? std::clamp(count - 1, 0, m_document->pageCount() - 1) : std::max(0, m_document->pageCount() - 1);
+        ensurePageText(m_viPage);
+        m_viIndex = m_viLines.isEmpty() ? 0 : m_viLines.last().first;
+    } else if (text == "v") {
+        if (m_viSelect == ViSelect::Normal) {
+            m_viSelect = ViSelect::None;
+            m_viAnchor = -1;
+            clearSelection();
+        } else {
+            if (m_viSelect == ViSelect::None) m_viAnchor = m_viIndex;
+            m_viSelect = ViSelect::Normal;
+            updateViSelection();
+        }
+        emit viModeChanged(true);
+        return true;
+    } else if (text == "V") {
+        if (m_viSelect == ViSelect::Line) {
+            m_viSelect = ViSelect::None;
+            m_viAnchor = -1;
+            clearSelection();
+        } else {
+            if (m_viSelect == ViSelect::None) m_viAnchor = m_viIndex;
+            m_viSelect = ViSelect::Line;
+            updateViSelection();
+        }
+        emit viModeChanged(true);
+        return true;
+    } else if (text == "y" || text == "Y") {
+        if (text == "Y" && m_viSelect == ViSelect::None && !m_viLines.isEmpty()) {
+            const auto &line = m_viLines.at(currentLineIndex());
+            m_selectionPage = m_viPage;
+            m_selection = m_document->getSelectionAtIndex(m_viPage, line.first, line.second - line.first + 1);
+        } else if (m_viSelect == ViSelect::None && !m_selection && !m_viLines.isEmpty()) {
+            const auto &line = m_viLines.at(currentLineIndex());
+            m_selectionPage = m_viPage;
+            m_selection = m_document->getSelectionAtIndex(m_viPage, line.first, line.second - line.first + 1);
+        }
+        copySelection();
+        m_viSelect = ViSelect::None;
+        m_viAnchor = -1;
+        clearSelection();
+        emit viModeChanged(true);
+        return true;
+    } else if (text == "i") {
+        exitViMode();
+        return true;
+    } else if (text == "z") {
+        const auto rect = viCharRect(m_viPage, m_viIndex);
+        verticalScrollBar()->setValue(qRound(pageRect(m_viPage).y() + rect.center().y() * m_zoom - viewport()->height() / 2.0));
+        return true;
+    } else if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+        followReference(false);
+        return true;
+    } else {
+        return false;
+    }
+
+    ensureViCursorVisible();
+    updateViSelection();
+    return true;
 }
 
 void ReaderView::beginHints(bool preview)
@@ -563,6 +925,21 @@ void ReaderView::activateLink(const QPdfLink &link, bool preview)
 
 void ReaderView::followReference(bool preview)
 {
+    if (m_viMode) {
+        const auto caret = viCharRect(m_viPage, m_viIndex);
+        const auto link = linkAt({m_viPage, caret.center()});
+        if (link.isValid()) { activateLink(link, preview); return; }
+        QString citation = selectedText().trimmed();
+        if (citation.isEmpty()) {
+            ensurePageText(m_viPage);
+            const int start = std::max(0, m_viIndex - 12);
+            const int len = std::min(int(m_viText.size()) - start, 28);
+            const auto slice = m_viText.mid(start, len);
+            const auto match = QRegularExpression(R"(\[(\d+)\])").match(slice);
+            if (match.hasMatch()) citation = match.captured(1);
+        }
+        if (!citation.isEmpty() && !preview) { findReference(citation); return; }
+    }
     if (m_hover) {
         const auto link = linkAt(*m_hover);
         if (link.isValid()) { activateLink(link, preview); return; }

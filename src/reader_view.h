@@ -51,6 +51,12 @@ public:
     bool hintKey(const QString &text);
     bool hinting() const { return m_hinting; }
     void cancelHints();
+    void toggleViMode();
+    void exitViMode();
+    bool viMode() const { return m_viMode; }
+    bool viSelecting() const { return m_viSelect != ViSelect::None; }
+    QString viModeLabel() const;
+    bool handleViKey(int key, Qt::KeyboardModifiers modifiers, const QString &text, int count = 1, const QString &pending = {});
     void followReference(bool preview = false);
     void findReference(QString citation);
     void copySelection();
@@ -64,6 +70,7 @@ signals:
     void searchChanged();
     void message(const QString &text);
     void hintsChanged(bool active);
+    void viModeChanged(bool active);
     void previewRequested(int page, QPointF point);
     void externalLinkRequested(const QUrl &url);
 
@@ -77,6 +84,7 @@ protected:
     void wheelEvent(QWheelEvent *) override;
 
 private:
+    enum class ViSelect { None, Normal, Line };
     struct Hit { int page; QPointF point; };
     struct Hint { QString label; QPdfLink link; int sourcePage; QRectF rect; };
     struct SearchHit { int page; QPointF point; QList<QPolygonF> bounds; };
@@ -89,6 +97,11 @@ private:
     void selectInitialMatch();
     void searchStep();
     void referenceStep();
+    void ensurePageText(int page);
+    QRectF viCharRect(int page, int index) const;
+    void updateViSelection();
+    void ensureViCursorVisible();
+    void moveViVertical(int deltaLines);
 
     QPdfDocument *m_document;
     QPdfPageRenderer *m_renderer;
@@ -119,6 +132,14 @@ private:
     bool m_hintPreview = false;
     QString m_hintPrefix;
     QList<Hint> m_hints;
+    bool m_viMode = false;
+    ViSelect m_viSelect = ViSelect::None;
+    int m_viPage = 0;
+    int m_viIndex = 0;
+    int m_viAnchor = -1;
+    QString m_viText;
+    int m_viTextPage = -1;
+    QVector<QPair<int, int>> m_viLines;
     QTimer m_referenceTimer;
     QRegularExpression m_referencePattern;
     int m_referencePage = -1;

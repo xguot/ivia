@@ -33,7 +33,7 @@ bool createDemo(const QString &path)
         <b>5j</b> travels five steps. <b>Ctrl+D</b> moves half a screen down; <b>Ctrl+U</b> brings it back.
         The idea is fluency, rather than a long list of shortcuts.</p>
         <p>Type <b>gg</b> to return to the beginning, <b>G</b> to visit the final page, or <b>3G</b> to
-        jump straight to page three. Zoom with <b>+</b> and <b>−</b>; <b>0</b> fits the page width.</p>
+        jump straight to page three. Zoom with <b>−</b> and <b>+</b> (or <b>=</b>); <b>W</b> fits the page width and <b>H</b> fits the page height.</p>
         <div class="note">TRY IT &nbsp; Type <b>/attention</b> and press Enter. Then use <b>n</b> to follow each occurrence.</div>)",
         R"(<h2>3 &nbsp; A paper is a conversation</h2>
         <p>References connect an argument to the work around it. Following one should feel like opening
@@ -65,8 +65,8 @@ bool createDemo(const QString &path)
         Close one buffer with <b>:bd</b>, or leave Ivia with <b>:q</b>. Your reading session will be ready
         the next time you open it.</p>
         <h2>7 &nbsp; Work at your own pace</h2>
-        <p>A minimal reader should still be a practical tool. Drag to select a passage and press <b>y</b>
-        to copy it. Open the embedded contents with <b>t</b>. Clear search highlights with <b>:noh</b>.
+        <p>A minimal reader should still be a practical tool. Press <b>Ctrl+Shift+Space</b> for Vi copy mode
+        (or drag with the mouse), select with <b>v</b>, and press <b>y</b> to copy. Open contents with <b>t</b>. Clear search highlights with <b>:noh</b>.
         If your typesetting tool has rebuilt the paper, <b>:reload</b> loads the updated file.</p>
         <div class="note">WHEN IN DOUBT &nbsp; Press <b>Esc</b> to return to normal mode. <b>:help</b> is the complete field guide.</div>)",
         R"(<h2>References</h2>
