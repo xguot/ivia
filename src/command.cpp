@@ -111,7 +111,7 @@ QString expandPath(QString path, const QString &baseDirectory)
                               .absoluteFilePath(path));
 }
 
-QStringList filePathCompletions(const QString &text, const QString &baseDirectory)
+QStringList filePathCompletions(const QString &text, const QString &baseDirectory, bool directoriesOnly)
 {
     const auto argument = pathArgument(text);
     const auto &path = argument.path;
@@ -130,7 +130,8 @@ QStringList filePathCompletions(const QString &text, const QString &baseDirector
     const auto partial = trailingSlash || path.isEmpty() ? QString{} : info.fileName();
     const auto prefix = trailingSlash ? path : path.left(path.lastIndexOf('/') + 1);
     const bool keepPrefix = expandPath(prefix, baseDirectory) == directory.absolutePath();
-    QDir::Filters filters = QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot;
+    QDir::Filters filters = QDir::Dirs | QDir::NoDotAndDotDot;
+    if (!directoriesOnly) filters |= QDir::Files;
     if (partial.startsWith('.')) filters |= QDir::Hidden;
     QStringList candidates;
     for (const auto &entry : directory.entryInfoList(filters, QDir::Name | QDir::IgnoreCase)) {
@@ -162,8 +163,8 @@ QStringList filePathCompletions(const QString &text, const QString &baseDirector
 
 QStringList commandNames()
 {
-    return {"e", "edit", "b", "buffer", "buffers", "bn", "bnext", "bp", "bprevious",
-            "bd", "bdelete", "q", "quit", "qa", "page", "zoom", "fit", "toc", "marks",
+    return {"e", "edit", "cd", "chdir", "pwd", "b", "buffer", "buffers", "bn", "bnext", "bp", "bprevious",
+            "bd", "bdelete", "q", "quit", "qa", "page", "zoom", "fit", "files", "ls", "toc", "marks",
             "mark", "delmark", "nohlsearch", "noh", "set", "help", "reload", "ref", "info"};
 }
 }

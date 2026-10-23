@@ -25,6 +25,8 @@
 #include <QPdfBookmarkModel>
 #include <QPdfDocument>
 #include <QPushButton>
+#include <QPlainTextEdit>
+#include <QTextDocument>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -69,11 +71,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setMinimumSize(640, 460);
     setAcceptDrops(true);
     m_dark = QSettings().value("appearance/dark", false).toBool();
+    m_workingDirectory = QDir::currentPath();
     buildUi();
     applyTheme();
     qApp->installEventFilter(this);
     m_messageTimer.setSingleShot(true);
-    connect(&m_messageTimer, &QTimer::timeout, m_messageLabel, &QWidget::hide);
+    connect(&m_messageTimer, &QTimer::timeout, this, [this] { m_messageLabel->clear(); updateStatus(); });
     m_saveTimer.setInterval(5000);
     connect(&m_saveTimer, &QTimer::timeout, this, &MainWindow::saveSession);
     m_saveTimer.start();
@@ -131,8 +134,7 @@ void MainWindow::buildUi()
     panelLayout->addWidget(m_panelTree);
     connect(m_panelTree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem *item) {
         if (!item->data(0, Qt::UserRole).isValid()) return;
-        if (m_panelKind == "buffers") switchBuffer(item->data(0, Qt::UserRole).toInt());
-        else if (m_panelKind == "marks") jumpMark(item->data(0, Qt::UserRole).toString().at(0));
+        if (m_panelKind == "marks") jumpMark(item->data(0, Qt::UserRole).toString().at(0));
         else if (reader())
             reader()->jump(item->data(0, Qt::UserRole).toInt(), item->data(0, Qt::UserRole + 1).toPointF());
         if (reader()) reader()->setFocus();
@@ -170,47 +172,94 @@ void MainWindow::buildUi()
     splitter->setSizes({260, 920});
     layout->addWidget(splitter, 1);
 
-    // These are children over the canvas, not rows in its layout. Entering a
-    // command must not resize the PDF viewport or move the reading position.
-    m_promptBar = new QFrame(central);
+    // One reserved row: the PDF keeps the same viewport when entering a command.
+    m_bottomLine = new QStackedWidget;
+    m_bottomLine->setObjectName("bottomLine");
+    m_bottomLine->setFixedHeight(28);
+    layout->addWidget(m_bottomLine);
+    m_statusLine = new QFrame;
+    m_statusLine->setObjectName("statusLine");
+    auto *status = new QHBoxLayout(m_statusLine);
+    status->setContentsMargins(12, 0, 12, 0);
+    status->setSpacing(16);
+    m_statusFile = new QLabel;
+    m_statusFile->setObjectName("statusFile");
+    m_statusFile->setTextFormat(Qt::PlainText);
+    m_statusFile->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    status->addWidget(m_statusFile, 1);
+    m_pendingLabel = new QLabel;
+    m_pendingLabel->setObjectName("pendingKeys");
+    status->addWidget(m_pendingLabel);
+    m_statusPosition = new QLabel;
+    m_statusPosition->setObjectName("statusPosition");
+    status->addWidget(m_statusPosition);
+    m_bottomLine->addWidget(m_statusLine);
+
+    m_promptBar = new QFrame;
     m_promptBar->setObjectName("promptBar");
-    m_promptBar->setFixedHeight(22);
     auto *promptRow = new QHBoxLayout(m_promptBar);
-    promptRow->setContentsMargins(2, 0, 2, 0);
+    promptRow->setContentsMargins(12, 0, 12, 0);
     promptRow->setSpacing(0);
     m_promptPrefix = new QLabel(":");
     m_promptPrefix->setObjectName("promptPrefix");
     m_prompt = new CommandLine;
     m_prompt->setObjectName("commandLine");
-    m_prompt->setFrame(false);
-    m_prompt->setAttribute(Qt::WA_MacShowFocusRect, false);
-    m_prompt->setClearButtonEnabled(false);
     promptRow->addWidget(m_promptPrefix);
     promptRow->addWidget(m_prompt, 1);
     connect(m_prompt, &QLineEdit::returnPressed, this, &MainWindow::submitPrompt);
-    m_promptBar->hide();
+    m_bottomLine->addWidget(m_promptBar);
+
     m_completionLabel = new QLabel(central);
     m_completionLabel->setObjectName("completionList");
-    m_completionLabel->setTextFormat(Qt::PlainText);
+    m_completionLabel->setTextFormat(Qt::RichText);
     m_completionLabel->setWordWrap(true);
     m_completionLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_completionLabel->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
     m_completionLabel->hide();
+    connect(m_completionLabel, &QLabel::linkActivated, this, [this](const QString &link) {
+        bool ok;
+        const int selected = link.toInt(&ok);
+        if (!ok || selected < 0 || selected >= m_completions.size()) return;
+        m_completionIndex = selected;
+        replacePromptCompletion(m_completions.at(selected));
+        showCompletionMenu(m_completions, selected);
+        m_prompt->setFocus();
+    });
     connect(m_prompt, &CommandLine::cancelRequested, this, &MainWindow::leavePrompt);
     connect(m_prompt, &CommandLine::completionRequested, this, &MainWindow::completePrompt);
     connect(m_prompt, &CommandLine::completionListRequested, this, &MainWindow::listPromptCompletions);
     connect(m_prompt, &CommandLine::allCompletionsRequested, this, &MainWindow::insertAllCompletions);
     connect(m_prompt, &CommandLine::longestCompletionRequested, this, &MainWindow::longestCompletion);
     connect(m_prompt, &CommandLine::historyRequested, this, &MainWindow::recallPrompt);
-    connect(m_prompt, &QLineEdit::textChanged, m_completionLabel, &QWidget::hide);
+    connect(m_prompt, &QLineEdit::textChanged, this, [this] {
+        m_completionLabel->hide();
+        m_prompt->setCompletionActive(false);
+    });
+    connect(m_prompt, &QLineEdit::cursorPositionChanged, this, [this](int, int position) {
+        if (position != m_completionCursor) {
+            m_completionLabel->hide();
+            m_prompt->setCompletionActive(false);
+        }
+    });
 
-    m_messageLabel = new QLabel(central);
+    m_messageLabel = new QLabel;
     m_messageLabel->setObjectName("notice");
-    m_messageLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_messageLabel->hide();
-    m_pendingLabel = new QLabel(central);
-    m_pendingLabel->setObjectName("pendingKeys");
-    m_pendingLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_pendingLabel->hide();
+    m_messageLabel->setTextFormat(Qt::PlainText);
+    m_bottomLine->addWidget(m_messageLabel);
+    m_continueLabel = new QLabel("Press ENTER or type command to continue");
+    m_continueLabel->setObjectName("hitEnter");
+    m_bottomLine->addWidget(m_continueLabel);
+    m_output = new QPlainTextEdit(central);
+    m_output->setObjectName("commandOutput");
+    m_output->setReadOnly(true);
+    m_output->setFrameShape(QFrame::NoFrame);
+    m_output->setFocusPolicy(Qt::NoFocus);
+    m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_output->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_output->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_output->document()->setDocumentMargin(12);
+    m_output->hide();
+    m_bottomLine->setCurrentWidget(m_statusLine);
 
     // Native file shortcuts work even without an application toolbar or menu.
     auto *openAction = new QAction("Open PDF…", this);
@@ -258,13 +307,18 @@ void MainWindow::applyTheme()
         #brand { font-family: Georgia; font-size: 38px; color: %5; }
         #welcomeOpen { color: %1; }
         #welcomeHint { color: %2; font-size: 11px; }
-        #promptBar { background: %6; border: 0; border-radius: 0; }
+        #bottomLine, #statusLine, #promptBar { background: %3; border: 0; border-radius: 0; }
+        #statusFile, #statusPosition, #pendingKeys, #notice, #hitEnter, #commandOutput {
+            font-family: Menlo, Consolas, monospace; font-size: 12px; color: %1; background: %3; border: 0;
+        }
+        #statusPosition { color: %2; }
+        #notice, #hitEnter { padding: 0 12px; }
+        #hitEnter { color: %2; }
+        #commandOutput { background: %3; }
         #promptPrefix, #commandLine, #completionList { padding: 0; margin: 0; font-family: Menlo, Consolas, monospace; font-size: 13px; background: transparent; border: 0; }
         #promptPrefix { color: %1; }
-        #completionList { color: %1; background: %6; border: 0; padding: 2px; }
+        #completionList { color: %1; background: %3; border: 0; padding: 6px 12px; }
         #commandLine { color: %1; selection-background-color: #dddddd; selection-color: #000000; }
-        #notice { background: %8; color: %9; border: 0; border-radius: 0; padding: 7px 11px; font-size: 11px; }
-        #pendingKeys { background: %8; color: %9; border-radius: 0; padding: 5px 9px; font-family: Menlo, Consolas, monospace; font-size: 11px; }
         #panel { background: %3; border-right: 1px solid %4; }
         #panelTitle { font-size: 10px; font-weight: 500; letter-spacing: 1px; color: %2; }
         QTreeWidget { border: 0; background: transparent; outline: 0; }
@@ -274,8 +328,7 @@ void MainWindow::applyTheme()
         QLineEdit { background: %3; color: %1; selection-background-color: %7; selection-color: %1; }
         QTextBrowser { border: 0; background: transparent; padding: 18px; }
     )").arg(colors.ink.name(), colors.muted.name(), colors.surface.name(), colors.border.name(),
-            colors.accent.name(), colors.canvas.name(), colors.accentWash.name(),
-            colors.inputBackground.name(), colors.inputForeground.name()));
+            colors.accent.name(), colors.canvas.name(), colors.accentWash.name()));
     for (auto &item : m_buffers) item->view->setDark(m_dark);
 }
 
@@ -286,7 +339,7 @@ MainWindow::Buffer *MainWindow::buffer() const
 ReaderView *MainWindow::reader() const { return buffer() ? buffer()->view : nullptr; }
 QString MainWindow::baseDirectory() const
 {
-    return buffer() ? QFileInfo(buffer()->path).absolutePath() : QDir::currentPath();
+    return m_workingDirectory;
 }
 
 void MainWindow::chooseFile()
@@ -336,6 +389,7 @@ bool MainWindow::openFile(const QString &input)
         return false;
     }
     auto item = std::make_unique<Buffer>();
+    item->number = m_nextBufferNumber++;
     item->path = path;
     item->document = document.release();
     item->view = createView(item->document);
@@ -377,9 +431,13 @@ ReaderView *MainWindow::createView(QPdfDocument *document)
 void MainWindow::switchBuffer(int index)
 {
     if (index < 0 || index >= bufferCount()) return;
+    if (m_waitingForEnter) dismissOutput();
     resetPending();
     if (reader()) reader()->cancelHints();
+    if (buffer() && index != m_active) m_alternatePath = buffer()->path;
     m_active = index;
+    m_bufferVisits.removeAll(buffer()->path);
+    m_bufferVisits.append(buffer()->path);
     m_stack->setCurrentWidget(reader());
     reader()->setFocus();
     setWindowTitle(QFileInfo(buffer()->path).fileName() + " — Ivia");
@@ -405,6 +463,7 @@ void MainWindow::saveSession()
     QSettings settings;
     settings.setValue("session/files", paths);
     settings.setValue("session/active", m_active);
+    settings.setValue("session/directory", m_workingDirectory);
     settings.setValue("window/geometry", saveGeometry());
     settings.setValue("appearance/dark", m_dark);
 }
@@ -412,6 +471,8 @@ void MainWindow::saveSession()
 void MainWindow::restoreSession()
 {
     const QSettings settings;
+    const auto savedDirectory = settings.value("session/directory").toString();
+    if (QFileInfo(savedDirectory).isDir()) m_workingDirectory = savedDirectory;
     const auto paths = settings.value("session/files").toStringList();
     const int active = settings.value("session/active", 0).toInt();
     m_restoring = true;
@@ -427,70 +488,134 @@ void MainWindow::closeBuffer()
     saveBuffer(buffer());
     auto item = std::move(m_buffers[size_t(index)]);
     m_buffers.erase(m_buffers.begin() + index);
+    m_bufferVisits.removeAll(item->path);
     m_active = -1;
     m_stack->removeWidget(item->view);
     delete item->view;
     delete item->document;
-    if (bufferCount()) switchBuffer(std::min(index, bufferCount() - 1));
+    if (bufferCount()) {
+        int next = std::min(index, bufferCount() - 1);
+        const auto path = m_bufferVisits.isEmpty() ? QString{} : m_bufferVisits.last();
+        for (int i = 0; i < bufferCount(); ++i)
+            if (m_buffers[size_t(i)]->path == path) next = i;
+        m_alternatePath = m_bufferVisits.size() > 1 ? m_bufferVisits.at(m_bufferVisits.size() - 2) : QString{};
+        switchBuffer(next);
+    }
     else { m_stack->setCurrentWidget(m_welcome); m_panel->hide(); setWindowTitle("Ivia"); updateStatus(); }
     saveSession();
 }
 
 void MainWindow::positionOverlays()
 {
-    const QRect bounds = centralWidget()->rect();
-    constexpr int inset = 16;
-    m_promptBar->setGeometry(0, bounds.height() - m_promptBar->height(), bounds.width(), m_promptBar->height());
-    m_completionLabel->setFixedWidth(bounds.width());
-    const int completionHeight = std::min(bounds.height() / 3,
-        std::max(26, m_completionLabel->heightForWidth(bounds.width())));
-    m_completionLabel->setGeometry(0, m_promptBar->y() - completionHeight, bounds.width(), completionHeight);
-    m_messageLabel->setMaximumWidth(bounds.width() - inset * 2);
-    m_messageLabel->adjustSize();
-    m_messageLabel->move(inset, bounds.height() - inset - m_messageLabel->height()
-                         - (m_promptBar->isVisible() ? m_promptBar->height() + 8 : 0)
-                         - (m_completionLabel->isVisible() ? m_completionLabel->height() : 0));
-    m_pendingLabel->adjustSize();
-    m_pendingLabel->move(bounds.width() - inset - m_pendingLabel->width(),
-                         bounds.height() - inset - m_pendingLabel->height());
+    const int width = centralWidget()->width();
+    const int bottom = m_bottomLine->geometry().top();
+    m_completionLabel->setFixedWidth(width);
+    const int height = std::min(centralWidget()->height() / 3,
+                               std::max(28, m_completionLabel->heightForWidth(width)));
+    m_completionLabel->setGeometry(0, bottom - height, width, height);
+    const int outputHeight = std::min(centralWidget()->height() / 2,
+        m_output->fontMetrics().lineSpacing() * (m_output->blockCount() + 1) + 24);
+    m_output->setGeometry(0, bottom - outputHeight, width, outputHeight);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     positionOverlays();
+    updateStatus();
+}
+
+QString MainWindow::bufferName(const Buffer *item) const
+{
+    return QDir(m_workingDirectory).relativeFilePath(item->path);
 }
 
 void MainWindow::updateStatus()
 {
-    const auto keys = m_count + m_pending;
-    const bool pendingChanged = m_pendingLabel->text() != keys;
-    m_pendingLabel->setText(keys);
-    m_pendingLabel->setVisible(!keys.isEmpty() && m_promptKind.isNull());
+    m_pendingLabel->setText(m_count + m_pending);
+    QString filename = "[No PDF]";
+    QString position;
     if (buffer()) {
-        QString title = QString("%1 — %2/%3 — Ivia")
-                .arg(QFileInfo(buffer()->path).fileName()).arg(reader()->currentPage() + 1)
-                .arg(buffer()->document->pageCount());
-        if (!reader()->searchText().isEmpty())
-            title.prepend(QString("%1/%2 matches — ").arg(reader()->matchIndex() + 1).arg(reader()->matchCount()));
+        filename = bufferName(buffer());
+        auto *view = reader();
+        position = QString("%1/%2  %3%")
+            .arg(view->currentPage() + 1).arg(buffer()->document->pageCount()).arg(qRound(view->zoom() * 100));
+        if (!view->searchText().isEmpty())
+            position.prepend(QString("%1/%2 matches  ").arg(view->matchIndex() + 1).arg(view->matchCount()));
+        const auto title = QFileInfo(buffer()->path).fileName() + " — Ivia";
         if (windowTitle() != title) setWindowTitle(title);
     } else setWindowTitle("Ivia");
-    if (pendingChanged) positionOverlays();
+    m_statusPosition->setText(position);
+    m_statusFile->setToolTip(filename);
+    m_statusFile->setText(QFontMetrics(m_statusFile->font()).elidedText(
+        filename, Qt::ElideMiddle, std::max(120, width() - m_statusPosition->sizeHint().width() - 100)));
+    if (!m_promptKind.isNull()) m_bottomLine->setCurrentWidget(m_promptBar);
+    else if (m_waitingForEnter) m_bottomLine->setCurrentWidget(m_continueLabel);
+    else if (m_messageTimer.isActive() && !m_messageLabel->text().isEmpty()) m_bottomLine->setCurrentWidget(m_messageLabel);
+    else m_bottomLine->setCurrentWidget(m_statusLine);
 }
 
 void MainWindow::showMessage(const QString &message)
 {
-    m_messageLabel->setText(QFontMetrics(m_messageLabel->font()).elidedText(
-        message, Qt::ElideRight, std::max(160, centralWidget()->width() - 60)));
+    m_messageLabel->setText(QFontMetrics(m_messageLabel->font()).elidedText(message, Qt::ElideRight, std::max(160, width() - 28)));
     m_messageLabel->setToolTip(message);
-    m_messageLabel->show();
-    m_messageLabel->raise();
-    positionOverlays();
     m_messageTimer.start(3500);
+    updateStatus();
+}
+
+void MainWindow::dismissOutput()
+{
+    m_waitingForEnter = false;
+    m_output->hide();
+    updateStatus();
+}
+
+void MainWindow::showBuffers()
+{
+    QStringList lines;
+    int width = 0;
+    for (const auto &item : m_buffers) width = std::max(width, int(bufferName(item.get()).size()));
+    width = std::min(width, 90);
+    for (const auto &item : m_buffers) {
+        const bool current = item.get() == buffer();
+        const auto flag = current ? "%a" : item->path == m_alternatePath ? "#h" : " h";
+        const auto name = '"' + bufferName(item.get()) + '"';
+        lines.append(QString("%1 %2   %3  page %4").arg(item->number, 3).arg(flag)
+                         .arg(name, -(width + 2)).arg(item->view->currentPage() + 1));
+    }
+    if (lines.isEmpty()) lines.append("No buffers");
+    m_output->setPlainText(lines.join('\n'));
+    m_waitingForEnter = true;
+    m_panel->hide();
+    m_completionLabel->hide();
+    m_messageTimer.stop();
+    m_output->show();
+    m_output->raise();
+    positionOverlays();
+    centralWidget()->setFocus();
+    updateStatus();
+}
+
+bool MainWindow::changeDirectory(const QString &argument)
+{
+    const auto target = argument == "-" ? m_previousDirectory
+        : expandPath(argument.isEmpty() ? "~" : argument, m_workingDirectory);
+    const QFileInfo directory(target);
+    if (target.isEmpty() || !directory.isDir() || !directory.isReadable()) {
+        showMessage("E344: Cannot find directory: " + argument);
+        return false;
+    }
+    m_previousDirectory = m_workingDirectory;
+    m_workingDirectory = directory.canonicalFilePath();
+    m_completions.clear();
+    saveSession();
+    updateStatus();
+    return true;
 }
 
 void MainWindow::enterPrompt(QChar kind, QString initial)
 {
+    dismissOutput();
     resetPending();
     if (reader()) reader()->cancelHints();
     m_promptKind = kind;
@@ -498,6 +623,7 @@ void MainWindow::enterPrompt(QChar kind, QString initial)
     m_prompt->setText(initial);
     m_prompt->setPlaceholderText({});
     m_completionText.clear();
+    m_prompt->setCompletionActive(false);
     m_completions.clear();
     m_completionIndex = -1;
     m_messageTimer.stop();
@@ -505,8 +631,7 @@ void MainWindow::enterPrompt(QChar kind, QString initial)
     m_historyIndex = m_history.size();
     m_historyDraft.clear();
     m_completionLabel->hide();
-    m_promptBar->show();
-    m_promptBar->raise();
+    m_bottomLine->setCurrentWidget(m_promptBar);
     positionOverlays();
     m_prompt->setFocus();
     updateStatus();
@@ -515,7 +640,7 @@ void MainWindow::enterPrompt(QChar kind, QString initial)
 void MainWindow::leavePrompt()
 {
     m_promptKind = {};
-    m_promptBar->hide();
+    m_prompt->setCompletionActive(false);
     m_completionLabel->hide();
     m_messageTimer.stop();
     m_messageLabel->hide();
@@ -547,23 +672,50 @@ QStringList MainWindow::promptCompletions() const
     const auto text = m_prompt->text().left(m_prompt->cursorPosition());
     QStringList candidates;
     const auto separator = QRegularExpression("\\s+").match(text);
-    if (!separator.hasMatch()) {
+    const auto command = parseCommand(text);
+    const bool bareBuffer = text == "b" || text == "buffer";
+    if (!separator.hasMatch() && !bareBuffer) {
         for (const auto &name : commandNames()) if (name.startsWith(text)) candidates.append(name);
         return candidates;
     }
-    const auto command = parseCommand(text);
-    const auto prefix = text.left(separator.capturedEnd());
-    if (command.name == "e" || command.name == "edit") {
+    const auto prefix = bareBuffer ? text + ' ' : text.left(separator.capturedEnd());
+    if (command.name == "e" || command.name == "edit" || command.name == "cd" || command.name == "chdir") {
         const auto rawArgument = text.mid(separator.capturedEnd());
-        for (const auto &path : filePathCompletions(rawArgument, baseDirectory()))
+        for (const auto &path : filePathCompletions(rawArgument, baseDirectory(), command.name == "cd" || command.name == "chdir"))
             candidates.append(prefix + path);
     } else if (command.name == "b" || command.name == "buffer") {
-        for (int i = 0; i < bufferCount(); ++i)
-            if (QString::number(i + 1).startsWith(command.argument)
-                    || QFileInfo(m_buffers[size_t(i)]->path).fileName().contains(command.argument, Qt::CaseInsensitive))
-                candidates.append(prefix + QString::number(i + 1));
+        for (const auto &item : m_buffers) {
+            const auto name = bufferName(item.get());
+            if (!name.contains(command.argument, Qt::CaseInsensitive)) continue;
+            // The completion is the path, never the buffer's internal number.
+            const auto value = name.contains(' ') ? '"' + name + '"' : name;
+            candidates.append(prefix + value);
+        }
     }
     return candidates;
+}
+
+void MainWindow::showCompletionMenu(const QStringList &candidates, int selected)
+{
+    if (candidates.isEmpty()) return;
+    const auto colors = theme(m_dark);
+    QStringList labels;
+    // Keep the selected candidate visible even for long buffer lists.
+    const int first = std::max(0, selected - 3);
+    const int last = std::min(int(candidates.size()), first + 8);
+    if (first) labels.append("…");
+    for (int i = first; i < last; ++i) {
+        const auto command = parseCommand(candidates.at(i));
+        const auto label = (command.argument.isEmpty() ? command.name : command.argument).toHtmlEscaped();
+        labels.append(QString("<a href=\"%1\" style=\"color:%2; background-color:%3; text-decoration:none;\">%4</a>")
+            .arg(i).arg(colors.ink.name(), i == selected ? colors.accentWash.name() : colors.surface.name(), label));
+    }
+    if (last < candidates.size()) labels.append("…");
+    m_completionLabel->setText(labels.join("&nbsp;&nbsp;&nbsp;"));
+    m_completionLabel->show();
+    m_completionLabel->raise();
+    m_prompt->setCompletionActive(true);
+    positionOverlays();
 }
 
 void MainWindow::replacePromptCompletion(const QString &prefix)
@@ -587,6 +739,7 @@ void MainWindow::completePrompt(bool reverse)
         if (m_completionIndex < -1) m_completionIndex = count - 1;
         if (m_completionIndex >= count) m_completionIndex = -1;
         replacePromptCompletion(m_completionIndex < 0 ? m_completionOriginal : m_completions.at(m_completionIndex));
+        showCompletionMenu(m_completions, m_completionIndex);
         return;
     }
     const auto candidates = promptCompletions();
@@ -597,25 +750,26 @@ void MainWindow::completePrompt(bool reverse)
     auto prefix = candidates.first();
     for (const auto &candidate : candidates)
         while (!candidate.startsWith(prefix) && !prefix.isEmpty()) prefix.chop(1);
-    if (prefix.size() <= m_prompt->cursorPosition() || candidates.size() == 1) {
+    const auto command = parseCommand(m_prompt->text());
+    const bool buffers = command.name == "b" || command.name == "buffer";
+    if (buffers || prefix.size() <= m_prompt->cursorPosition() || candidates.size() == 1) {
         m_completionIndex = reverse ? candidates.size() - 1 : 0;
         prefix = candidates.at(m_completionIndex);
     }
     replacePromptCompletion(prefix);
+    if (candidates.size() > 1) showCompletionMenu(candidates, m_completionIndex);
 }
 
 void MainWindow::listPromptCompletions()
 {
     const auto candidates = promptCompletions();
     if (candidates.isEmpty()) { showMessage("No completions"); return; }
-    QStringList display = candidates.mid(0, 50);
-    if (candidates.size() > 50) display.append(QString("… %1 more").arg(candidates.size() - 50));
-    m_messageTimer.stop();
-    m_messageLabel->hide();
-    m_completionLabel->setText(display.join("    "));
-    m_completionLabel->show();
-    m_completionLabel->raise();
-    positionOverlays();
+    m_completions = candidates;
+    m_completionOriginal = m_prompt->text().left(m_prompt->cursorPosition());
+    m_completionText = m_prompt->text();
+    m_completionCursor = m_prompt->cursorPosition();
+    m_completionIndex = -1;
+    showCompletionMenu(candidates);
 }
 
 void MainWindow::insertAllCompletions()
@@ -671,7 +825,9 @@ bool MainWindow::executeCommand(const QString &text)
     }
     if (name == "q" || name == "quit" || name == "qa") { close(); return true; }
     if (name == "help") { showHelp(); return true; }
-    if (name == "buffers" || name == "ls" || ((name == "b" || name == "buffer") && argument.isEmpty())) { showPanel("buffers"); return true; }
+    if (name == "buffers" || name == "ls" || name == "files") { showBuffers(); return true; }
+    if (name == "pwd") { showMessage(m_workingDirectory); return true; }
+    if (name == "cd" || name == "chdir") return changeDirectory(argument);
     if (name == "set") {
         if (argument == "dark" || argument == "light") {
             m_dark = argument == "dark"; applyTheme(); saveSession(); return true;
@@ -680,17 +836,24 @@ bool MainWindow::executeCommand(const QString &text)
     }
     if (!reader()) { showMessage("Open a PDF with :e path/to/paper.pdf"); return false; }
     if (name == "b" || name == "buffer") {
+        if (argument.isEmpty()) return true;
+        int index = -1;
         bool numeric;
-        int index = argument.toInt(&numeric) - 1;
-        if (!numeric) {
-            index = -1;
+        const int number = argument.toInt(&numeric);
+        const auto path = expandPath(argument, m_workingDirectory);
+        for (int i = 0; i < bufferCount(); ++i) {
+            const auto &item = m_buffers[size_t(i)];
+            if ((numeric && item->number == number) || (!numeric && item->path == path)
+                    || (argument == "#" && item->path == m_alternatePath)) { index = i; break; }
+        }
+        if (index < 0 && !numeric && argument != "#") {
             for (int i = 0; i < bufferCount(); ++i)
-                if (QFileInfo(m_buffers[size_t(i)]->path).fileName().contains(argument, Qt::CaseInsensitive)) {
-                    if (index >= 0) { showMessage("Ambiguous buffer name. Use :b number"); return false; }
+                if (bufferName(m_buffers[size_t(i)].get()).contains(argument, Qt::CaseInsensitive)) {
+                    if (index >= 0) { showMessage("E93: More than one match; use :b <Tab> to choose a filename"); return false; }
                     index = i;
                 }
         }
-        if (index < 0 || index >= bufferCount()) { showMessage("No such buffer"); return false; }
+        if (index < 0) { showMessage("E86: No such buffer: " + argument); return false; }
         switchBuffer(index); return true;
     }
     if (name == "bn" || name == "bnext") { switchBuffer((m_active + 1) % bufferCount()); return true; }
@@ -761,7 +924,7 @@ void MainWindow::resetPending()
 {
     m_pending.clear();
     m_count.clear();
-    if (m_pendingLabel) { m_pendingLabel->clear(); m_pendingLabel->hide(); }
+    if (m_pendingLabel) m_pendingLabel->clear();
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event)
@@ -771,7 +934,23 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event)
     if (!widget || widget->window() != this || QApplication::activeModalWidget())
         return QMainWindow::eventFilter(object, event);
     auto *key = static_cast<QKeyEvent *>(event);
-    if (m_promptBar->isVisible()) return false; // Never interpret propagated editing keys as reader commands.
+    if (!m_promptKind.isNull()) return false; // Never interpret propagated editing keys as reader commands.
+    if (m_waitingForEnter) {
+        const auto text = key->text();
+        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down || text == "j" || text == "k") {
+            const bool up = key->key() == Qt::Key_Up || text == "k";
+            m_output->verticalScrollBar()->setValue(m_output->verticalScrollBar()->value() + (up ? -1 : 1));
+            return true;
+        }
+        dismissOutput();
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter || key->key() == Qt::Key_Escape
+                || text == " " || (CommandLine::physicalControl(key->modifiers()) && key->key() == Qt::Key_C)) {
+            if (reader()) reader()->setFocus();
+            return true;
+        }
+        normalKey(key);
+        return true;
+    }
     if (object == m_panelTree && key->key() == Qt::Key_Escape) {
         m_panel->hide(); if (reader()) reader()->setFocus(); return true;
     }
@@ -900,6 +1079,7 @@ void MainWindow::jumpMark(QChar mark)
 void MainWindow::showPanel(const QString &kind)
 {
     if (m_panel->isVisible() && m_panelKind == kind) { m_panel->hide(); if (reader()) reader()->setFocus(); return; }
+    dismissOutput();
     m_panelKind = kind;
     populatePanel();
     m_panel->show();
@@ -911,13 +1091,7 @@ void MainWindow::populatePanel()
 {
     m_panelTitle->setText(m_panelKind == "toc" ? "CONTENTS" : m_panelKind.toUpper());
     m_panelTree->clear();
-    if (m_panelKind == "buffers") {
-        for (int i = 0; i < bufferCount(); ++i) {
-            auto *row = new QTreeWidgetItem(m_panelTree, {QString("%1   %2").arg(i + 1).arg(QFileInfo(m_buffers[size_t(i)]->path).completeBaseName())});
-            row->setData(0, Qt::UserRole, i);
-            row->setToolTip(0, m_buffers[size_t(i)]->path);
-        }
-    } else if (buffer() && m_panelKind == "marks") {
+    if (buffer() && m_panelKind == "marks") {
         for (auto it = buffer()->marks.cbegin(); it != buffer()->marks.cend(); ++it) {
             auto *row = new QTreeWidgetItem(m_panelTree, {QString("%1   Page %2").arg(it.key()).arg(it.value().page + 1)});
             row->setData(0, Qt::UserRole, QString(it.key()));
@@ -1000,7 +1174,9 @@ void MainWindow::showHelp()
     <tr><td><code>y</code></td><td>Copy mouse-selected text</td></tr></table>
     <h2>The command line</h2><table>
     <tr><td><code>:e path/to/file.pdf</code></td><td>Open a PDF; spaces, quotes and ~/ work</td></tr>
-    <tr><td><code>:b / :b 2 / :b name</code></td><td>List / switch buffers. Also <code>gt</code> and <code>gT</code>.</td></tr>
+    <tr><td><code>:b name / :b Tab</code></td><td>Switch buffers by relative filename; Tab chooses. Also gt / gT.</td></tr>
+    <tr><td><code>:ls / :buffers</code></td><td>List buffers below the paper; Enter returns, or : starts another command.</td></tr>
+    <tr><td><code>:cd path / :pwd</code></td><td>Change / show the working directory; :cd goes home, :cd - goes back.</td></tr>
     <tr><td><code>:bn / :bp / :bd</code></td><td>Next / previous / close buffer</td></tr>
     <tr><td><code>:42 / :page 42</code></td><td>Jump to physical page 42</td></tr>
     <tr><td><code>:toc / :marks</code></td><td>Contents / saved marks. j/k and Enter navigate panels.</td></tr>
@@ -1017,7 +1193,8 @@ void MainWindow::showHelp()
     <tr><td><code>Ctrl+N / P</code></td><td>Cycle active completions, otherwise prompt history</td></tr>
     <tr><td><code>Ctrl+J / M</code></td><td>Submit the command</td></tr>
     <tr><td><code>Ctrl+C / [</code></td><td>Cancel the command</td></tr></table>
-    <p>Paths support ~/, Unix ~username, $VAR, ${VAR}, and quoted names. Use :e ~ to browse home.</p>
+    <p>Paths support ~/, Unix ~username, $VAR, ${VAR}, and quoted names. Relative paths use :pwd,
+    independent of the active buffer. Use :cd to change it, or :e ~ to browse home.</p>
     <p>Tab / Shift+Tab cycle command and file completions. ↑/↓ recall prompt history. Reading positions, zoom,
     buffers and marks are restored next launch. PDFs are opened read-only.</p>
     <p>On macOS, Ctrl means the physical Control key. Command+O opens files.</p>

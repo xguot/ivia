@@ -39,7 +39,9 @@ bool CommandLine::handles(const QKeyEvent *key) const
     }
     if (key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))
         return false; // Let native Command shortcuts and composed text through.
+    if (m_completionActive && (key->key() == Qt::Key_Left || key->key() == Qt::Key_Right)) return true;
     return key->key() == Qt::Key_Escape || key->key() == Qt::Key_Backspace
+            || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter
             || key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab
             || key->key() == Qt::Key_Up || key->key() == Qt::Key_Down;
 }
@@ -107,6 +109,7 @@ void CommandLine::handleKey(QKeyEvent *key)
         return;
     }
     switch (key->key()) {
+    case Qt::Key_Return: case Qt::Key_Enter: QLineEdit::keyPressEvent(key); break;
     case Qt::Key_Escape: emit cancelRequested(); break;
     case Qt::Key_Backspace:
         if (text().isEmpty()) emit cancelRequested(); else backspace();
@@ -114,6 +117,8 @@ void CommandLine::handleKey(QKeyEvent *key)
     case Qt::Key_Tab: case Qt::Key_Backtab:
         emit completionRequested(key->key() == Qt::Key_Backtab || key->modifiers().testFlag(Qt::ShiftModifier));
         break;
+    case Qt::Key_Left: emit completionRequested(true); break;
+    case Qt::Key_Right: emit completionRequested(false); break;
     case Qt::Key_Up: emit historyRequested(-1, false); break;
     case Qt::Key_Down: emit historyRequested(1, false); break;
     default: break;

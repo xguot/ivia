@@ -60,7 +60,7 @@ bool createDemo(const QString &path)
         <h2>6 &nbsp; A desk with more than one paper</h2>
         <p>Open another paper with <b>:e ~/papers/example.pdf</b>. Each document becomes a buffer,
         keeping its own position, search, and marks. Switch with <b>gt</b> and <b>gT</b>, or type
-        <b>:b</b> to see the list. <b>:b 2</b> switches to buffer two; a unique filename fragment works too.</p>
+        <b>:ls</b> to see the list. <b>:b</b> followed by Tab lets you choose a relative filename.</p>
         <p>The command line completes names and PDF paths with Tab. Up and Down recall past commands.
         Close one buffer with <b>:bd</b>, or leave Ivia with <b>:q</b>. Your reading session will be ready
         the next time you open it.</p>

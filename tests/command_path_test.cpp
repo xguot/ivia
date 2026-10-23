@@ -82,6 +82,52 @@ private slots:
         QCOMPARE(partial, QStringList{"${IVIA_TEST_PATH_ROOT}per.pdf"});
     }
 
+    void directoryCompletions()
+    {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        QDir directory(temporary.path());
+        QVERIFY(directory.mkdir("paper archive"));
+        QVERIFY(directory.mkdir("papers"));
+        QVERIFY(directory.mkdir(".hidden"));
+        for (const auto &name : {"paper.pdf", "paper.PDF", "paper.txt"}) {
+            QFile file(directory.filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+        }
+
+        const QStringList expected{"paper archive/", "papers/"};
+        QCOMPARE(filePathCompletions({}, temporary.path(), true), expected);
+        QCOMPARE(filePathCompletions("pa", temporary.path(), true), expected);
+        QCOMPARE(filePathCompletions("./pa", temporary.path(), true),
+                 (QStringList{"./paper archive/", "./papers/"}));
+        QCOMPARE(filePathCompletions("'pa", temporary.path(), true),
+                 (QStringList{"'paper archive/", "'papers/"}));
+        QCOMPARE(filePathCompletions("\"pa\"", temporary.path(), true),
+                 (QStringList{"\"paper archive/\"", "\"papers/\""}));
+        QCOMPARE(filePathCompletions(".h", temporary.path(), true), QStringList{".hidden/"});
+        QCOMPARE(filePathCompletions("~", temporary.path(), true), QStringList{"~/"});
+        QCOMPARE(filePathCompletions("'~", temporary.path(), true), QStringList{"'~/"});
+        QVERIFY(filePathCompletions("paper.p", temporary.path(), true).isEmpty());
+
+        const auto name = "IVIA_TEST_DIRECTORY_ROOT";
+        const auto previous = qgetenv(name);
+        const bool wasSet = qEnvironmentVariableIsSet(name);
+        qputenv(name, temporary.path().toUtf8());
+        const auto root = filePathCompletions("$IVIA_TEST_DIRECTORY_ROOT", {}, true);
+        const auto prefix = filePathCompletions("${IVIA_TEST_DIRECTORY_ROOT}/pa", {}, true);
+        const auto quoted = filePathCompletions("\"$IVIA_TEST_DIRECTORY_ROOT/pa", {}, true);
+        qputenv(name, (temporary.path() + "/pa").toUtf8());
+        const auto partial = filePathCompletions("$IVIA_TEST_DIRECTORY_ROOT", {}, true);
+        if (wasSet) qputenv(name, previous); else qunsetenv(name);
+        QCOMPARE(root, QStringList{"$IVIA_TEST_DIRECTORY_ROOT/"});
+        QCOMPARE(prefix, (QStringList{"${IVIA_TEST_DIRECTORY_ROOT}/paper archive/",
+                                      "${IVIA_TEST_DIRECTORY_ROOT}/papers/"}));
+        QCOMPARE(quoted, (QStringList{"\"$IVIA_TEST_DIRECTORY_ROOT/paper archive/",
+                                      "\"$IVIA_TEST_DIRECTORY_ROOT/papers/"}));
+        QCOMPARE(partial, (QStringList{"${IVIA_TEST_DIRECTORY_ROOT}per archive/",
+                                       "${IVIA_TEST_DIRECTORY_ROOT}pers/"}));
+    }
+
     void namedHome()
     {
 #ifdef Q_OS_UNIX

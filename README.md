@@ -6,23 +6,24 @@ Ivia pairs a bare reading canvas with Vim movements, an Ex-style command line,
 independent document buffers, search, persistent marks, and reference jumps.
 The reading canvas uses Qt PDF directly; it does not embed a browser.
 
-There are no persistent toolbars, buffer tabs, status bars, or scrollbars. The
-default surround uses Sioyek's neutral light background. Command text sits directly
-along the bottom edge on that same background, without a box or contrasting strip.
-Press `:` or `/` for a plain, full-width line at the bottom edge; it disappears on
-Enter or Escape without resizing or moving the paper. Tab / Shift+Tab cycle
-completions in place. Contents, marks and buffer lists appear only when requested.
-Page and search information lives in the native window title; `Ctrl+G` or `:info`
-briefly shows the filename, page and zoom. Other notices also disappear automatically.
+There are no persistent toolbars, buffer tabs, or scrollbars. A quiet last row
+shows the current filename relative to Ivia's working directory, page position,
+and zoom. Press `:`, `/`, or `?` and that same row becomes the command or search
+line; Enter or Escape restores the status without moving the paper. Both use a
+12-pixel horizontal inset and the same neutral surface, without a box or border.
+Tab completion appears just above the row when needed. Contents and marks use
+optional panels; buffer lists use Vim-style command output above the last row.
+`Ctrl+G` or `:info` briefly shows filename, page and zoom. Other notices also
+disappear automatically.
 
 The previous iris palette has been removed. Light mode takes its canvas and
 base grays from Sioyek's shipped defaults; dark mode takes its base grays from
-Zathura's defaults. Command input now blends into the reading surround:
+Zathura's defaults. The shared status/command row uses a neutral surface:
 
 | Element | Light (`:set light`) | Dark (`:set dark`) |
 | --- | --- | --- |
 | Canvas | RGB 0.97, 0.97, 0.97 (approximately `#f7f7f7`) | `#000000` |
-| Command input background | Same as canvas | Same as canvas |
+| Status / command background | `#ffffff` | `#232323` |
 | Command input text | `#000000` | `#dddddd` |
 
 Sources: [Sioyek prefs.config](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/prefs.config),
@@ -109,9 +110,12 @@ mouse back/forward buttons, and Control/Command+wheel zoom also work.
 | Command | Action |
 | --- | --- |
 | `:e path/to/paper.pdf` | Open a PDF in a buffer; `:edit` is an alias |
-| `:b`, `:buffers`, `:ls` | Show open buffers |
-| `:b 2`, `:b unique-name` | Switch to a buffer by number or unique filename fragment |
+| `:b`, `:buffer` | Keep the current buffer; use Tab to choose another |
+| `:b relative/path.pdf`, `:b unique-name`, `:b 2` | Switch by relative filename, unique filename fragment, or stable buffer number |
+| `:ls`, `:buffers`, `:files` | Show a Vim-style buffer listing above the last row |
 | `:bn`, `:bp`, `:bd` | Next, previous, close buffer |
+| `:cd path`, `:chdir path` | Change Ivia's working directory |
+| `:cd`, `:cd -`, `:pwd` | Go home, return to the previous directory, show the current directory |
 | `:42`, `:page 42` | Jump to physical page 42 |
 | `:toc`, `:marks` | Show embedded contents or marks |
 | `:mark a`, `:delmark a` | Set / delete a persistent mark |
@@ -125,12 +129,32 @@ mouse back/forward buttons, and Control/Command+wheel zoom also work.
 | `:info` | Briefly show filename, page and zoom |
 | `:q`, `:quit`, `:qa` | Save the reading session and exit |
 
-Use Tab / Shift+Tab to cycle command, PDF path, and buffer completions. Up/Down recall prompt
-history. Paths support spaces, surrounding or unfinished quotes, `~`, `~/`,
+Use Tab / Shift+Tab to cycle command, PDF path, directory, and buffer completions.
+`:b<Tab>` and `:b <Tab>` both offer relative filenames instead of buffer numbers.
+The menu highlights the current choice; Tab / Shift+Tab, Ctrl+N / Ctrl+P, or arrow
+keys move through it. Clicking a choice selects it, and Enter executes the command.
+Without active completion, Up/Down recall prompt history.
+Paths support spaces, surrounding or unfinished quotes, `~`, `~/`,
 Unix `~username`, and `$VAR` / `${VAR}`. Completion preserves the notation you typed.
 `:e ~` opens a file picker in your home directory; other directory paths work too.
-Relative `:e` paths resolve beside the current PDF (or the working directory with no PDF open).
-In panels, use `j`/`k` and Enter, or the mouse.
+Relative `:e` paths and path completions use Ivia's working directory. It starts
+at the process working directory, is scoped to the Ivia window, and is saved with
+the session. Opening or switching PDFs does not change it. `:cd` accepts the same
+path notation, completes directories only, and leaves canonical document paths
+unchanged. In contents and marks panels, use `j`/`k` and Enter, or the mouse.
+
+`:ls`, `:buffers`, and `:files` display numbered, aligned rows like Vim:
+
+```text
+  1 %a   "papers/current.pdf"            page 50
+  2 #h   "papers/previous.pdf"           page 12
+Press ENTER or type command to continue
+```
+
+`%a` identifies the current buffer; `#h` identifies the alternate, hidden buffer.
+The listing uses PDF pages in place of text line numbers. Buffer numbers remain
+stable when another buffer closes. Press Enter to dismiss the listing, or `:` to
+start a command. The listing never opens a left-side buffer panel.
 
 The command line has explicit Vim editing keys on every platform, including the
 physical Control key on macOS. Native Command shortcuts and input methods remain
@@ -168,7 +192,8 @@ it lists completions rather than deleting the next character. Use Delete for for
 - Link hints use embedded PDF link geometry. Numbered reference fallback scans
   extracted text from the final page backward, one page per event-loop turn.
 - Reading positions, zoom, open buffers, interface theme, window geometry, and
-  document marks are saved through `QSettings` every five seconds and on exit.
+  document marks, along with Ivia's working directory, are saved through
+  `QSettings` every five seconds and on exit.
   Closing a buffer retains its marks and position for reopening. Search and jump
   history are per-session. Document paths are saved locally; PDFs are never
   modified or uploaded.

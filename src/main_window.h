@@ -11,6 +11,7 @@ class QLabel;
 class QStackedWidget;
 class QTreeWidget;
 class QFrame;
+class QPlainTextEdit;
 class QPdfDocument;
 class QPdfBookmarkModel;
 class QCloseEvent;
@@ -40,6 +41,7 @@ protected:
 
 private:
     struct Buffer {
+        int number = 0;
         QString path;
         QPdfDocument *document = nullptr;
         ReaderView *view = nullptr;
@@ -67,6 +69,11 @@ private:
     void longestCompletion();
     void replacePromptCompletion(const QString &prefix);
     void recallPrompt(int direction, bool cycleCompletion);
+    void showCompletionMenu(const QStringList &candidates, int selected = -1);
+    void showBuffers();
+    void dismissOutput();
+    bool changeDirectory(const QString &argument);
+    QString bufferName(const Buffer *item) const;
     void normalKey(QKeyEvent *event);
     void resetPending();
     void showPanel(const QString &kind);
@@ -79,10 +86,22 @@ private:
 
     std::vector<std::unique_ptr<Buffer>> m_buffers;
     int m_active = -1;
+    int m_nextBufferNumber = 1;
+    QString m_alternatePath;
+    QStringList m_bufferVisits;
+    QString m_workingDirectory;
+    QString m_previousDirectory;
     QStackedWidget *m_stack;
     QWidget *m_welcome;
     QLabel *m_messageLabel;
     QLabel *m_pendingLabel;
+    QStackedWidget *m_bottomLine;
+    QFrame *m_statusLine;
+    QLabel *m_statusFile;
+    QLabel *m_statusPosition;
+    QLabel *m_continueLabel;
+    QPlainTextEdit *m_output;
+    bool m_waitingForEnter = false;
     QFrame *m_promptBar;
     QLabel *m_promptPrefix;
     CommandLine *m_prompt;

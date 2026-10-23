@@ -9,6 +9,7 @@ class CommandLine final : public QLineEdit {
 public:
     explicit CommandLine(QWidget *parent = nullptr);
     static bool physicalControl(Qt::KeyboardModifiers modifiers);
+    void setCompletionActive(bool active) { m_completionActive = active; }
 
 signals:
     void cancelRequested();
@@ -25,5 +26,6 @@ private:
     bool handles(const QKeyEvent *key) const;
     void handleKey(QKeyEvent *key);
     void erasePreviousWord();
+    bool m_completionActive = false;
 };
 }

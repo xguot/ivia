@@ -9,6 +9,8 @@
 #include <QLabel>
 #include <QAction>
 #include <QInputMethodEvent>
+#include <QPlainTextEdit>
+#include <QStackedWidget>
 #include <QPdfDocument>
 #include <QPdfPageRenderer>
 #include <QScrollBar>
@@ -143,7 +145,9 @@ private slots:
         QTest::qWait(40);
         auto *view = window.reader();
         QCOMPARE(view->mapTo(window.centralWidget(), QPoint()), QPoint());
-        QCOMPARE(view->size(), window.centralWidget()->size());
+        auto *bottom = window.findChild<QStackedWidget *>("bottomLine");
+        QCOMPARE(view->width(), window.centralWidget()->width());
+        QCOMPARE(view->height() + bottom->height(), window.centralWidget()->height());
         view->scrollBy(0, 120);
         const auto viewportSize = view->viewport()->size();
         const auto pageOrigin = view->viewportPoint(0, {});
@@ -153,13 +157,14 @@ private slots:
         QVERIFY(prompt->placeholderText().isEmpty());
         QCOMPARE(view->viewport()->size(), viewportSize);
         QCOMPARE(view->viewportPoint(0, {}), pageOrigin);
+        QVERIFY(window.executeCommand("cd \"" + m_directory.path() + "\""));
         QTest::keyClicks(prompt, "b ");
         QTest::keyClick(prompt, Qt::Key_Tab);
-        QCOMPARE(prompt->text(), "b 1");
+        QCOMPARE(prompt->text(), "b \"Paper with spaces.pdf\"");
         QTest::keyClick(prompt, Qt::Key_Tab);
-        QCOMPARE(prompt->text(), "b 2");
+        QCOMPARE(prompt->text(), "b \"Second paper.pdf\"");
         QTest::keyClick(prompt, Qt::Key_Backtab);
-        QCOMPARE(prompt->text(), "b 1");
+        QCOMPARE(prompt->text(), "b \"Paper with spaces.pdf\"");
         QTest::keyClick(prompt, Qt::Key_Return);
         QVERIFY(window.reader() != view);
         auto *active = window.reader();
@@ -186,7 +191,8 @@ private slots:
         auto *line = prompt->parentWidget();
         QCOMPARE(line->x(), 0);
         QCOMPARE(line->width(), window.centralWidget()->width());
-        QCOMPARE(line->geometry().bottom(), window.centralWidget()->rect().bottom());
+        QCOMPARE(line->mapTo(window.centralWidget(), QPoint()).y() + line->height(), window.centralWidget()->height());
+        QCOMPARE(window.findChild<QLabel *>("promptPrefix")->mapTo(line, QPoint()).x(), 12);
         QVERIFY(line->height() <= 28);
 
         int shortcutCount = 0;
@@ -249,7 +255,7 @@ private slots:
         QCOMPARE(prompt->text(), "b");
         auto *list = window.findChild<QLabel *>("completionList");
         QVERIFY(list->isVisible());
-        QVERIFY(list->text().contains("buffer"));
+        QVERIFY(list->text().contains("Paper with spaces.pdf"));
         QCOMPARE(view->verticalScrollBar()->value(), before);
         QTest::keyClicks(prompt, "n");
         QVERIFY(!list->isVisible());
@@ -268,15 +274,19 @@ private slots:
         QCOMPARE(prompt->text(), "zoom 125");
         QTest::keyClick(prompt, Qt::Key_N, vimControl);
         QCOMPARE(prompt->text(), "draft");
-        prompt->setText("b");
+        prompt->setText("z");
         QTest::keyClick(prompt, Qt::Key_Tab);
-        QCOMPARE(prompt->text(), "b");
+        QCOMPARE(prompt->text(), "zoom");
+        QTest::keyClick(prompt, Qt::Key_Escape);
+        QTest::keyClicks(view, ":");
+        prompt->setText("fi");
+        QTest::keyClick(prompt, Qt::Key_D, vimControl);
         QTest::keyClick(prompt, Qt::Key_N, vimControl);
-        QCOMPARE(prompt->text(), "buffer");
+        QCOMPARE(prompt->text(), "fit");
         QTest::keyClick(prompt, Qt::Key_P, vimControl);
-        QCOMPARE(prompt->text(), "b");
+        QCOMPARE(prompt->text(), "fi");
         QTest::keyClick(prompt, Qt::Key_A, vimControl);
-        QVERIFY(prompt->text().startsWith("b buffer buffers"));
+        QCOMPARE(prompt->text(), "fit files");
 
         QVERIFY(writeFixture(m_directory.filePath("cycle-a.pdf")));
         QVERIFY(writeFixture(m_directory.filePath("cycle-b.pdf")));
@@ -341,9 +351,146 @@ private slots:
         QVERIFY(!window.executeCommand("b paper")); // ambiguous
         QVERIFY(window.executeCommand("bd"));
         QCOMPARE(window.bufferCount(), 1);
+        QVERIFY(!window.executeCommand("b #")); // a closed buffer cannot remain its own alternate
         QVERIFY(window.executeCommand("bd"));
         QCOMPARE(window.bufferCount(), 0);
         QCOMPARE(window.reader(), nullptr);
+    }
+    void statusRowAndVimBufferOutput() {
+        MainWindow window;
+        window.show();
+        QVERIFY(window.executeCommand("cd " + m_directory.path()));
+        QVERIFY(window.openFile(m_pdf));
+        QVERIFY(window.openFile(m_other));
+        auto *view = window.reader();
+        const auto size = view->viewport()->size();
+        auto *bottom = window.findChild<QStackedWidget *>("bottomLine");
+        auto *status = window.findChild<QFrame *>("statusLine");
+        auto *filename = window.findChild<QLabel *>("statusFile");
+        QCOMPARE(bottom->currentWidget(), status);
+        QCOMPARE(filename->text(), "Second paper.pdf");
+        QVERIFY(window.findChild<QLabel *>("statusPosition")->text().startsWith("1/3"));
+        QTest::keyClicks(view, ":");
+        auto *prompt = window.findChild<CommandLine *>("commandLine");
+        QVERIFY(prompt->isVisible());
+        QVERIFY(!status->isVisible());
+        QCOMPARE(view->viewport()->size(), size);
+        QTest::keyClicks(prompt, "ls");
+        QTest::keyClick(prompt, Qt::Key_Return);
+        auto *output = window.findChild<QPlainTextEdit *>("commandOutput");
+        QVERIFY(output->isVisible());
+        QVERIFY(!window.findChild<QWidget *>("panel")->isVisible());
+        const auto listing = output->toPlainText();
+        QVERIFY(listing.contains("1 #h"));
+        QVERIFY(listing.contains("2 %a"));
+        QVERIFY(listing.contains("\"Paper with spaces.pdf\""));
+        QVERIFY(listing.contains("page 1"));
+        QVERIFY(window.findChild<QLabel *>("hitEnter")->isVisible());
+        QCOMPARE(view->viewport()->size(), size);
+        QTest::keyClick(window.centralWidget(), Qt::Key_Return);
+        QVERIFY(!output->isVisible());
+        QCOMPARE(bottom->currentWidget(), status);
+        QVERIFY(window.executeCommand("ls"));
+        QTest::keyClicks(window.centralWidget(), ":");
+        QTest::keyClicks(prompt, "b #");
+        QVERIFY(!output->isVisible());
+        QCOMPARE(prompt->text(), "b #");
+        QTest::keyClick(prompt, Qt::Key_Return);
+        QVERIFY(window.reader() != view);
+        QCOMPARE(filename->text(), "Paper with spaces.pdf");
+        auto *first = window.reader();
+        QVERIFY(window.executeCommand("b"));
+        QCOMPARE(window.reader(), first);
+    }
+    void relativeBufferCompletionAndStableNumbers() {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QVERIFY(QDir(root.path()).mkdir("alpha"));
+        QVERIFY(QDir(root.path()).mkdir("beta"));
+        const auto a = root.filePath("alpha/paper.pdf");
+        const auto b = root.filePath("beta/paper.pdf");
+        QVERIFY(QFile::copy(m_pdf, a));
+        QVERIFY(QFile::copy(m_pdf, b));
+        MainWindow window;
+        window.show();
+        QVERIFY(window.executeCommand("cd " + root.path()));
+        QVERIFY(window.openFile(a));
+        auto *first = window.reader();
+        QVERIFY(window.openFile(b));
+        QTest::keyClicks(window.reader(), ":");
+        auto *prompt = window.findChild<CommandLine *>("commandLine");
+        QTest::keyClicks(prompt, "b");
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "b alpha/paper.pdf");
+        auto *choices = window.findChild<QLabel *>("completionList");
+        QVERIFY(choices->isVisible());
+        QVERIFY(choices->text().contains("alpha/paper.pdf"));
+        QVERIFY(choices->text().contains("beta/paper.pdf"));
+        QTest::keyClick(prompt, Qt::Key_Right);
+        QCOMPARE(prompt->text(), "b beta/paper.pdf");
+        QTest::keyClick(prompt, Qt::Key_Left);
+        QCOMPARE(prompt->text(), "b alpha/paper.pdf");
+        QTest::keyClick(prompt, Qt::Key_Return);
+        QCOMPARE(window.reader(), first);
+        QVERIFY(!window.executeCommand("b paper.pdf"));
+        QVERIFY(window.openFile(m_other)); // stable buffer 3
+        QVERIFY(window.executeCommand("b 1"));
+        QVERIFY(window.executeCommand("bd"));
+        QVERIFY(!window.executeCommand("b 1"));
+        QVERIFY(window.executeCommand("b 3"));
+        QVERIFY(window.executeCommand("ls"));
+        const auto listing = window.findChild<QPlainTextEdit *>("commandOutput")->toPlainText();
+        QVERIFY(listing.contains("3 %a"));
+        QVERIFY(listing.contains("2 #h"));
+        QVERIFY(!listing.contains("1 "));
+    }
+    void workingDirectoryCommandsAndSession() {
+        const auto processDirectory = QDir::currentPath();
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QVERIFY(QDir(root.path()).mkdir("papers"));
+        const auto paper = root.filePath("papers/paper.pdf");
+        QVERIFY(QFile::copy(m_pdf, paper));
+        {
+            MainWindow window;
+            window.show();
+            QVERIFY(window.executeCommand("cd " + root.path()));
+            QVERIFY(window.executeCommand("pwd"));
+            auto *message = window.findChild<QLabel *>("notice");
+            QCOMPARE(message->toolTip(), QFileInfo(root.path()).canonicalFilePath());
+            QVERIFY(window.executeCommand("e papers/paper.pdf"));
+            auto *first = window.reader();
+            QVERIFY(window.openFile(m_other));
+            QVERIFY(window.executeCommand("pwd"));
+            QCOMPARE(message->toolTip(), QFileInfo(root.path()).canonicalFilePath()); // switching files doesn't cd
+            QTest::keyClicks(window.reader(), ":");
+            auto *prompt = window.findChild<CommandLine *>("commandLine");
+            QTest::keyClicks(prompt, "cd pa");
+            QTest::keyClick(prompt, Qt::Key_Tab);
+            QCOMPARE(prompt->text(), "cd papers/");
+            QTest::keyClick(prompt, Qt::Key_Return);
+            QVERIFY(window.executeCommand("b paper.pdf"));
+            QCOMPARE(window.reader(), first);
+            QVERIFY(window.executeCommand("pwd"));
+            QCOMPARE(message->toolTip(), QFileInfo(root.filePath("papers")).canonicalFilePath());
+            QVERIFY(!window.executeCommand("cd missing"));
+            QVERIFY(window.executeCommand("pwd"));
+            QCOMPARE(message->toolTip(), QFileInfo(root.filePath("papers")).canonicalFilePath());
+            QVERIFY(window.executeCommand("cd -"));
+            QVERIFY(window.executeCommand("pwd"));
+            QCOMPARE(message->toolTip(), QFileInfo(root.path()).canonicalFilePath());
+            QVERIFY(window.executeCommand("cd"));
+            QVERIFY(window.executeCommand("pwd"));
+            QCOMPARE(message->toolTip(), QFileInfo(QDir::homePath()).canonicalFilePath());
+            QVERIFY(window.executeCommand("cd -"));
+            window.close();
+        }
+        MainWindow restored;
+        restored.restoreSession();
+        QVERIFY(restored.executeCommand("pwd"));
+        QCOMPARE(restored.findChild<QLabel *>("notice")->toolTip(), QFileInfo(root.path()).canonicalFilePath());
+        QCOMPARE(restored.bufferCount(), 2);
+        QCOMPARE(QDir::currentPath(), processDirectory); // no process-global mutation
     }
     void reloadIsTransactional() {
         const auto path = m_directory.filePath("Reload.pdf");
@@ -351,6 +498,7 @@ private slots:
         MainWindow window;
         window.show();
         QVERIFY(window.openFile(path));
+        QVERIFY(window.executeCommand("cd " + m_directory.path()));
         QTest::qWait(30);
         auto *original = window.reader();
         original->setZoom(1.2);
@@ -521,6 +669,7 @@ private slots:
         if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-welcome.png"));
         QVERIFY(window.openFile(path));
         window.reader()->setZoom(0.95);
+        QVERIFY(window.executeCommand("cd " + m_directory.path()));
         QTest::qWait(700);
         if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-reading.png"));
         QTest::keyClicks(window.reader(), ":");
@@ -528,6 +677,17 @@ private slots:
         QTest::keyClicks(prompt, "e ~/papers/");
         QTest::qWait(30);
         if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-command.png"));
+        QTest::keyClick(prompt, Qt::Key_Escape);
+        QVERIFY(window.openFile(m_other));
+        QVERIFY(window.executeCommand("b Ivia field notes.pdf"));
+        QTest::qWait(50);
+        QVERIFY(window.executeCommand("ls"));
+        if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-buffers.png"));
+        QTest::keyClick(window.centralWidget(), Qt::Key_Return);
+        QTest::keyClicks(window.reader(), ":");
+        QTest::keyClicks(prompt, "b");
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-buffer-completion.png"));
         QTest::keyClick(prompt, Qt::Key_Escape);
         window.executeCommand("set dark");
         window.reader()->setZoom(0.9);
