@@ -2,7 +2,10 @@
 #include <QColor>
 
 namespace ivia {
-// Keep the reading surround neutral; iris is reserved for interactive details.
+// Base RGB values come from the upstream defaults, not a custom color scheme:
+// https://github.com/ahrm/sioyek/blob/main/pdf_viewer/prefs.config
+// https://github.com/ahrm/sioyek/blob/main/pdf_viewer/main.cpp
+// https://github.com/pwmt/zathura/blob/develop/zathura/config.c
 struct Theme {
     QColor canvas;
     QColor surface;
@@ -11,14 +14,26 @@ struct Theme {
     QColor border;
     QColor accent;
     QColor accentWash;
+    QColor inputBackground;
+    QColor inputForeground;
+    QColor searchHighlight;
+    QColor activeSearchHighlight;
+    QColor selectionHighlight;
 };
 
 inline Theme theme(bool dark)
 {
     if (dark)
-        return {QColor("#242329"), QColor("#302e37"), QColor("#e6e1ee"),
-                QColor("#ada6ba"), QColor("#46414f"), QColor("#c2b2df"), QColor("#443c54")};
-    return {QColor("#e3e2e7"), QColor("#f7f5fa"), QColor("#393440"),
-            QColor("#7d7588"), QColor("#d9d3e2"), QColor("#79658f"), QColor("#eae3f3")};
+        // Zathura: default-bg/fg, completion-bg, inputbar-bg/fg and highlights.
+        return {QColor("#000000"), QColor("#232323"), QColor("#dddddd"),
+                QColor("#999999"), QColor("#232323"), QColor("#dddddd"), QColor("#444444"),
+                QColor("#131313"), QColor("#9fbc00"),
+                QColor(159, 251, 0, 128), QColor(0, 188, 0, 128), QColor(255, 255, 0, 80)};
+    // Sioyek's shipped prefs override main.cpp's white canvas with RGB .97.
+    // Overlay opacity is Ivia's; these are Sioyek's default highlight RGB values.
+    return {QColor::fromRgbF(0.97, 0.97, 0.97), QColor("#ffffff"), QColor("#000000"),
+            QColor("#666666"), QColor("#dddddd"), QColor("#000000"), QColor("#dddddd"),
+            QColor("#000000"), QColor("#ffffff"),
+            QColor(0, 255, 0, 65), QColor(0, 255, 0, 100), QColor(255, 255, 0, 80)};
 }
 }

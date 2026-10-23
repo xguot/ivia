@@ -87,21 +87,21 @@ bool createDemo(const QString &path)
     };
     for (int page = 0; page < headings.size(); ++page) {
         if (page) pdf.newPage();
-        painter.setPen(QColor("#82788e"));
+        painter.setPen(QColor("#666666"));
         painter.setFont(QFont("Helvetica Neue", 8));
         painter.drawText(QRectF(58, 42, 480, 16), "IVIA FIELD NOTES     /     01                                      READING, WITH INTENTION");
-        painter.setPen(QColor("#ddd7e4"));
+        painter.setPen(QColor("#dddddd"));
         painter.drawLine(QPointF(58, 69), QPointF(537, 69));
         QTextDocument document;
         document.setDocumentMargin(0);
         document.setDefaultFont(QFont("Georgia", 11));
         document.setDefaultStyleSheet(R"(
-            body {color:#343039;} h1{font-size:31pt;font-weight:normal;margin:0 0 12pt 0;}
-            .byline{font-family:Helvetica;font-size:9pt;color:#857c8f;margin-bottom:28pt;}
-            h2{font-family:Helvetica;font-size:12pt;margin-top:21pt;margin-bottom:10pt;color:#79658f;}
+            body {color:#000000;} h1{font-size:31pt;font-weight:normal;margin:0 0 12pt 0;}
+            .byline{font-family:Helvetica;font-size:9pt;color:#666666;margin-bottom:28pt;}
+            h2{font-family:Helvetica;font-size:12pt;margin-top:21pt;margin-bottom:10pt;color:#000000;}
             p{line-height:145%;margin-top:0;margin-bottom:13pt;}
-            .abstract{font-size:10pt;color:#756c7e;line-height:145%;}
-            .note{font-family:Helvetica;font-size:9pt;color:#79658f;margin-top:22pt;line-height:150%;}
+            .abstract{font-size:10pt;color:#666666;line-height:145%;}
+            .note{font-family:Helvetica;font-size:9pt;color:#000000;margin-top:22pt;line-height:150%;}
         )");
         document.setHtml("<h1>" + headings.at(page) + "</h1><p class='byline'>"
                          + (page == 0 ? "A practical guide to a quieter reading environment" : "The art of close reading · Ivia field notes")
@@ -111,7 +111,7 @@ bool createDemo(const QString &path)
         painter.translate(58, 99);
         document.drawContents(&painter, QRectF(0, 0, 479, 665));
         painter.restore();
-        painter.setPen(QColor("#857c8f"));
+        painter.setPen(QColor("#666666"));
         painter.setFont(QFont("Helvetica Neue", 8));
         painter.drawText(QRectF(58, 790, 479, 16), Qt::AlignLeft, "IVIA   /   A QUIET HOME FOR YOUR PAPERS");
         painter.drawText(QRectF(58, 790, 479, 16), Qt::AlignRight, QString::number(page + 1));

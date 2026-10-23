@@ -244,12 +244,12 @@ void MainWindow::applyTheme()
         #brand { font-family: Georgia; font-size: 38px; color: %5; }
         #welcomeOpen { color: %1; }
         #welcomeHint { color: %2; font-size: 11px; }
-        #promptBar { background: %3; border: 1px solid %4; border-left: 2px solid %5; border-radius: 4px; }
+        #promptBar { background: %8; border: 0; border-radius: 0; }
         #promptPrefix, #commandLine { font-family: Menlo, Consolas, monospace; font-size: 13px; background: transparent; border: 0; }
-        #promptPrefix { color: %5; }
-        #commandLine { color: %1; selection-background-color: %7; selection-color: %1; }
-        #notice { background: %3; color: %1; border: 1px solid %4; border-radius: 4px; padding: 7px 11px; font-size: 11px; }
-        #pendingKeys { background: %3; color: %5; border-radius: 4px; padding: 5px 9px; font-family: Menlo, Consolas, monospace; font-size: 11px; }
+        #promptPrefix { color: %9; }
+        #commandLine { color: %9; selection-background-color: #dddddd; selection-color: #000000; }
+        #notice { background: %8; color: %9; border: 0; border-radius: 0; padding: 7px 11px; font-size: 11px; }
+        #pendingKeys { background: %8; color: %9; border-radius: 0; padding: 5px 9px; font-family: Menlo, Consolas, monospace; font-size: 11px; }
         #panel { background: %3; border-right: 1px solid %4; }
         #panelTitle { font-size: 10px; font-weight: 500; letter-spacing: 1px; color: %2; }
         QTreeWidget { border: 0; background: transparent; outline: 0; }
@@ -259,7 +259,8 @@ void MainWindow::applyTheme()
         QLineEdit { background: %3; color: %1; selection-background-color: %7; selection-color: %1; }
         QTextBrowser { border: 0; background: transparent; padding: 18px; }
     )").arg(colors.ink.name(), colors.muted.name(), colors.surface.name(), colors.border.name(),
-            colors.accent.name(), colors.canvas.name(), colors.accentWash.name()));
+            colors.accent.name(), colors.canvas.name(), colors.accentWash.name(),
+            colors.inputBackground.name(), colors.inputForeground.name()));
     for (auto &item : m_buffers) item->view->setDark(m_dark);
 }
 
@@ -895,7 +896,7 @@ void MainWindow::showHelp()
     auto *text = new QTextBrowser;
     text->setHtml(R"(
     <style>body{font-size:14px;}h1{font-family:Georgia;font-weight:normal;font-size:32px;}
-    h2{font-size:15px;margin-top:24px;}td{padding:6px 18px 6px 0;}code{color:#79658f;}</style>
+    h2{font-size:15px;margin-top:24px;}td{padding:6px 18px 6px 0;}</style>
     <h1>A little fluency goes a long way.</h1>
     <p>Ivia is a keyboard-first home for academic PDFs. Press <code>Esc</code> to return to normal mode.</p>
     <h2>Move through a paper</h2><table>

@@ -7,12 +7,30 @@ independent document buffers, search, persistent marks, and reference jumps.
 The reading canvas uses Qt PDF directly; it does not embed a browser.
 
 There are no persistent toolbars, buffer tabs, status bars, or scrollbars. The
-default surround is a cool neutral gray with restrained light iris accents.
+default surround uses Sioyek's neutral light background, with black/white command input.
 Press `:` or `/` for a small, single-line input over the canvas; it disappears on
 Enter or Escape without resizing or moving the paper. Tab / Shift+Tab cycle
 completions in place. Contents, marks and buffer lists appear only when requested.
 Page and search information lives in the native window title; `Ctrl+G` or `:info`
 briefly shows the filename, page and zoom. Other notices also disappear automatically.
+
+The previous iris palette has been removed. Light mode takes its canvas and
+command colors from Sioyek's shipped defaults; dark mode takes its base and input
+colors from Zathura's defaults:
+
+| Element | Light (`:set light`) | Dark (`:set dark`) |
+| --- | --- | --- |
+| Canvas | RGB 0.97, 0.97, 0.97 (approximately `#f7f7f7`) | `#000000` |
+| Command input background | `#000000` | `#131313` |
+| Command input text | `#ffffff` | `#9fbc00` |
+
+Sources: [Sioyek prefs.config](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/prefs.config),
+[Sioyek main.cpp](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/main.cpp), and
+[Zathura config.c](https://github.com/pwmt/zathura/blob/develop/zathura/config.c).
+PDF page colors are preserved in both modes. Search uses the upstream highlight
+RGB values (green in Sioyek, yellow-green and green in Zathura); selection uses
+Sioyek's yellow. Ivia applies transparency to these overlays. Additional UI grays
+are neutral, with no iris tint, colored borders, or decorative page shadows.
 
 ## Build and run
 
@@ -120,7 +138,7 @@ In panels, use `j`/`k` and Enter, or the mouse.
   extreme zoom levels. PDF text remains available for search and selection.
 - Search is case-insensitive, literal, and incremental, scanning one page per
   event-loop turn. Changing the query cancels the previous scan. Results are
-  highlighted with muted iris; the active result has a fine iris frame. Broad queries stop at 20,000
+  highlighted in green/yellow-green; the active result has a fine black frame. Broad queries stop at 20,000
   matches and display a message.
 - Link hints use embedded PDF link geometry. Numbered reference fallback scans
   extracted text from the final page backward, one page per event-loop turn.

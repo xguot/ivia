@@ -346,6 +346,10 @@ private slots:
         window.reader()->setZoom(0.9);
         QTest::qWait(300);
         if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-dark.png"));
+        QTest::keyClicks(window.reader(), ":");
+        QTest::keyClicks(prompt, "e ~/papers/");
+        if (!output.isEmpty()) QVERIFY(window.grab().save(output + "/ivia-dark-command.png"));
+        QTest::keyClick(prompt, Qt::Key_Escape);
     }
 private:
     QTemporaryDir m_directory;

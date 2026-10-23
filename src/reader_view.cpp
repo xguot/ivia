@@ -200,14 +200,14 @@ void ReaderView::setDark(bool dark)
 void ReaderView::paintEvent(QPaintEvent *)
 {
     QPainter painter(viewport());
-    painter.fillRect(viewport()->rect(), theme(m_dark).canvas);
+    const auto colors = theme(m_dark);
+    painter.fillRect(viewport()->rect(), colors.canvas);
     const QPointF offset(horizontalScrollBar()->value(), verticalScrollBar()->value());
     const QRectF visible(offset, viewport()->size());
     painter.translate(-offset);
     for (int page = 0; page < m_pages.size(); ++page) {
         const auto rect = m_pages.at(page);
         if (!rect.intersects(visible)) continue;
-        painter.fillRect(rect.adjusted(-1, 1, 1, 3), QColor(0, 0, 0, 18));
         painter.fillRect(rect, Qt::white);
         qreal rasterScale = std::min(devicePixelRatioF(), 2.0);
         rasterScale = std::min(rasterScale, 6000.0 / std::max(rect.width(), rect.height()));
@@ -226,20 +226,20 @@ void ReaderView::paintEvent(QPaintEvent *)
         for (const auto &result : std::as_const(m_hits)) {
             if (result.page != page) continue;
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(172, 151, 205, 65));
+            painter.setBrush(colors.searchHighlight);
             for (const auto &bound : result.bounds) painter.drawPolygon(bound);
         }
         if (m_match >= 0 && m_match < matchCount()) {
             const auto &result = m_hits.at(m_match);
             if (result.page == page) {
-                painter.setPen(QPen(theme(false).accent, 1.2 / m_zoom));
-                painter.setBrush(QColor(172, 151, 205, 100));
+                painter.setPen(QPen(Qt::black, 1.0 / m_zoom));
+                painter.setBrush(colors.activeSearchHighlight);
                 for (const auto &bound : result.bounds) painter.drawPolygon(bound);
             }
         }
         if (m_selectionPage == page && m_selection) {
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(163, 143, 198, 80));
+            painter.setBrush(colors.selectionHighlight);
             for (const auto &bound : m_selection->bounds()) painter.drawPolygon(bound);
         }
         painter.restore();
@@ -252,7 +252,7 @@ void ReaderView::paintEvent(QPaintEvent *)
             QRectF badge(origin, QSizeF(painter.fontMetrics().horizontalAdvance(hint.label) + 12, 23));
             painter.setPen(theme(false).border);
             painter.setBrush(theme(false).accentWash);
-            painter.drawRoundedRect(badge, 3, 3);
+            painter.drawRect(badge);
             painter.setPen(theme(false).ink);
             painter.drawText(badge, Qt::AlignCenter, hint.label);
         }

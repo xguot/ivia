@@ -1,6 +1,5 @@
 #include "main_window.h"
 #include "demo.h"
-#include "theme.h"
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
@@ -38,10 +37,10 @@ int main(int argc, char **argv)
     icon.fill(Qt::transparent);
     QPainter painter(&icon);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setBrush(QColor("#ded5ec"));
+    painter.setBrush(Qt::black);
     painter.setPen(Qt::NoPen);
     painter.drawRoundedRect(QRectF(4, 4, 120, 120), 27, 27);
-    painter.setPen(ivia::theme(false).accent);
+    painter.setPen(Qt::white);
     painter.setFont(QFont("Georgia", 76));
     painter.drawText(icon.rect().adjusted(0, -9, 0, 0), Qt::AlignCenter, "i");
     painter.end();
