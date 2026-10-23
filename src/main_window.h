@@ -18,6 +18,7 @@ class QDragEnterEvent;
 class QDropEvent;
 
 namespace ivia {
+class CommandLine;
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 public:
@@ -49,6 +50,7 @@ private:
     void buildUi();
     void applyTheme();
     void chooseFile();
+    bool chooseFiles(const QString &directory);
     void switchBuffer(int index);
     void closeBuffer();
     void saveBuffer(Buffer *buffer);
@@ -59,6 +61,12 @@ private:
     void leavePrompt();
     void submitPrompt();
     void completePrompt(bool reverse = false);
+    QStringList promptCompletions() const;
+    void listPromptCompletions();
+    void insertAllCompletions();
+    void longestCompletion();
+    void replacePromptCompletion(const QString &prefix);
+    void recallPrompt(int direction, bool cycleCompletion);
     void normalKey(QKeyEvent *event);
     void resetPending();
     void showPanel(const QString &kind);
@@ -77,7 +85,8 @@ private:
     QLabel *m_pendingLabel;
     QFrame *m_promptBar;
     QLabel *m_promptPrefix;
-    QLineEdit *m_prompt;
+    CommandLine *m_prompt;
+    QLabel *m_completionLabel;
     QWidget *m_panel;
     QLabel *m_panelTitle;
     QTreeWidget *m_panelTree;
@@ -90,7 +99,9 @@ private:
     QString m_historyDraft;
     QStringList m_completions;
     QString m_completionText;
+    QString m_completionOriginal;
     int m_completionIndex = -1;
+    int m_completionCursor = -1;
     QTimer m_messageTimer;
     QTimer m_saveTimer;
     bool m_dark = false;

@@ -8,6 +8,7 @@ find_package(Qt6 6.6 REQUIRED COMPONENTS Widgets Pdf)
 
 add_library(ivia_core STATIC
     src/command.cpp src/command.h
+    src/command_line.cpp src/command_line.h
     src/reader_view.cpp src/reader_view.h
     src/main_window.cpp src/main_window.h
     src/demo.cpp src/demo.h src/theme.h
@@ -38,4 +39,10 @@ if(BUILD_TESTING)
     target_link_libraries(ivia_tests PRIVATE ivia_core Qt6::Test)
     add_test(NAME ivia_tests COMMAND ivia_tests)
     set_tests_properties(ivia_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME ivia_hidpi_render COMMAND ivia_tests visibleRastersSettle)
+    set_tests_properties(ivia_hidpi_render PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
+    qt_add_executable(ivia_command_path_tests tests/command_path_test.cpp)
+    target_link_libraries(ivia_command_path_tests PRIVATE ivia_core Qt6::Test)
+    add_test(NAME ivia_command_path_tests COMMAND ivia_command_path_tests)
 endif()

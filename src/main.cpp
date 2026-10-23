@@ -56,7 +56,6 @@ int main(int argc, char **argv)
 
     ivia::MainWindow window;
     app.window = &window;
-    window.show();
     if (!parser.positionalArguments().isEmpty()) {
         for (const auto &file : parser.positionalArguments()) window.openFile(QFileInfo(file).absoluteFilePath());
     } else if (parser.isSet("demo")) {
@@ -66,5 +65,8 @@ int main(int argc, char **argv)
         if (ivia::createDemo(path)) window.openFile(path);
         else window.showMessage("Could not create the reading guide");
     } else if (!parser.isSet("no-session")) window.restoreSession();
+    // Restore buffers and reading positions before presenting the first frame.
+    // Otherwise macOS briefly shows the welcome screen / default first page.
+    window.show();
     return app.exec();
 }

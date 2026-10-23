@@ -1,11 +1,16 @@
 #include "command.h"
+#include "command_line.h"
 #include "demo.h"
 #include "main_window.h"
 #include <QFile>
+#include <QFileDialog>
 #include <QClipboard>
 #include <QLineEdit>
 #include <QLabel>
+#include <QAction>
+#include <QInputMethodEvent>
 #include <QPdfDocument>
+#include <QPdfPageRenderer>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalSpy>
@@ -15,6 +20,12 @@
 #include <memory>
 
 using namespace ivia;
+
+#ifdef Q_OS_MACOS
+constexpr auto vimControl = Qt::MetaModifier;
+#else
+constexpr auto vimControl = Qt::ControlModifier;
+#endif
 
 // A tiny, deterministic PDF with an internal link, an outline and searchable
 // numbered references. No network fixture or third-party document is needed.
@@ -63,6 +74,7 @@ private slots:
         QCoreApplication::setApplicationName("IviaTests");
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_directory.path());
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         m_pdf = m_directory.filePath("Paper with spaces.pdf");
         m_other = m_directory.filePath("Second paper.pdf");
         QVERIFY(writeFixture(m_pdf));
@@ -106,7 +118,7 @@ private slots:
         QCOMPARE(view->currentPage(), 1);
         QTest::keyClicks(view, "gg");
         QCOMPARE(view->currentPage(), 0);
-        QTest::keyClick(view, Qt::Key_D, Qt::MetaModifier);
+        QTest::keyClick(view, Qt::Key_D, vimControl);
         QVERIFY(view->verticalScrollBar()->value() > 100);
         QTest::keyClicks(view, ":");
         auto *prompt = window.findChild<QLineEdit *>("commandLine");
@@ -164,6 +176,152 @@ private slots:
         QVERIFY(notice->isVisible());
         QTest::keyClick(active, Qt::Key_Escape);
         QVERIFY(!notice->isVisible());
+    }
+    void commandLineEditingAndInputMethods() {
+        MainWindow window;
+        window.show();
+        QTest::keyClicks(window.centralWidget(), ":");
+        auto *prompt = window.findChild<CommandLine *>("commandLine");
+        QVERIFY(prompt->isVisible());
+        auto *line = prompt->parentWidget();
+        QCOMPARE(line->x(), 0);
+        QCOMPARE(line->width(), window.centralWidget()->width());
+        QCOMPARE(line->geometry().bottom(), window.centralWidget()->rect().bottom());
+        QVERIFY(line->height() <= 28);
+
+        int shortcutCount = 0;
+        auto *competing = new QAction(&window);
+        competing->setShortcut(QKeySequence(vimControl | Qt::Key_H));
+        window.addAction(competing);
+        connect(competing, &QAction::triggered, &window, [&] { ++shortcutCount; });
+        QTest::keyClicks(prompt, "e ~/papers/x");
+        QTest::keyClick(prompt, Qt::Key_H, vimControl);
+        QCOMPARE(prompt->text(), "e ~/papers/");
+        QCOMPARE(shortcutCount, 0);
+        prompt->setText("e alpha beta");
+        QTest::keyClick(prompt, Qt::Key_W, vimControl);
+        QCOMPARE(prompt->text(), "e alpha ");
+        prompt->setText("e ~/papers/file.pdf");
+        QTest::keyClick(prompt, Qt::Key_B, vimControl);
+        QCOMPARE(prompt->cursorPosition(), 0);
+        QTest::keyClick(prompt, Qt::Key_E, vimControl);
+        QCOMPARE(prompt->cursorPosition(), prompt->text().size());
+        prompt->setCursorPosition(4);
+        QTest::keyClick(prompt, Qt::Key_U, vimControl);
+        QCOMPARE(prompt->text(), "papers/file.pdf");
+        QCOMPARE(prompt->cursorPosition(), 0);
+
+        prompt->clear();
+        QInputMethodEvent composed;
+        composed.setCommitString("~/");
+        QApplication::sendEvent(prompt, &composed);
+        QCOMPARE(prompt->text(), "~/");
+#ifdef Q_OS_MACOS
+        QTest::keyClick(prompt, Qt::Key_A, Qt::ControlModifier); // native Command+A
+        QCOMPARE(prompt->selectedText(), "~/");
+#endif
+        QTest::keyClick(prompt, Qt::Key_C, vimControl);
+        QVERIFY(!prompt->isVisible());
+        QTest::keyClicks(window.centralWidget(), ":");
+        QTest::keyClick(prompt, Qt::Key_H, vimControl);
+        QVERIFY(!prompt->isVisible());
+        QTest::keyClicks(window.centralWidget(), "/");
+        QTest::keyClicks(prompt, "queryx");
+        QTest::keyClick(prompt, Qt::Key_H, vimControl);
+        QCOMPARE(prompt->text(), "query");
+        QTest::keyClick(prompt, Qt::Key_BracketLeft, vimControl);
+        QVERIFY(!prompt->isVisible());
+    }
+    void vimCompletionHistoryAndHomePaths() {
+        MainWindow window;
+        window.show();
+        QVERIFY(window.openFile(m_pdf));
+        auto *view = window.reader();
+        view->jump(1);
+        const auto before = view->verticalScrollBar()->value();
+        QTest::keyClicks(view, ":");
+        auto *prompt = window.findChild<CommandLine *>("commandLine");
+        const auto promptPage = view->currentPage();
+        QTest::keyClick(prompt, Qt::Key_O, vimControl);
+        QCOMPARE(view->currentPage(), promptPage);
+        prompt->setText("b");
+        QTest::keyClick(prompt, Qt::Key_D, vimControl);
+        QCOMPARE(prompt->text(), "b");
+        auto *list = window.findChild<QLabel *>("completionList");
+        QVERIFY(list->isVisible());
+        QVERIFY(list->text().contains("buffer"));
+        QCOMPARE(view->verticalScrollBar()->value(), before);
+        QTest::keyClicks(prompt, "n");
+        QVERIFY(!list->isVisible());
+        prompt->setText("zo 125");
+        prompt->setCursorPosition(2);
+        QTest::keyClick(prompt, Qt::Key_L, vimControl);
+        QCOMPARE(prompt->text(), "zoom 125");
+        QCOMPARE(prompt->cursorPosition(), 4);
+        QTest::keyClick(prompt, Qt::Key_M, vimControl);
+        QCOMPARE(view->zoom(), 1.25);
+        QVERIFY(!prompt->isVisible());
+
+        QTest::keyClicks(view, ":");
+        prompt->setText("draft");
+        QTest::keyClick(prompt, Qt::Key_P, vimControl);
+        QCOMPARE(prompt->text(), "zoom 125");
+        QTest::keyClick(prompt, Qt::Key_N, vimControl);
+        QCOMPARE(prompt->text(), "draft");
+        prompt->setText("b");
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "b");
+        QTest::keyClick(prompt, Qt::Key_N, vimControl);
+        QCOMPARE(prompt->text(), "buffer");
+        QTest::keyClick(prompt, Qt::Key_P, vimControl);
+        QCOMPARE(prompt->text(), "b");
+        QTest::keyClick(prompt, Qt::Key_A, vimControl);
+        QVERIFY(prompt->text().startsWith("b buffer buffers"));
+
+        QVERIFY(writeFixture(m_directory.filePath("cycle-a.pdf")));
+        QVERIFY(writeFixture(m_directory.filePath("cycle-b.pdf")));
+        const auto original = "e " + m_directory.filePath("cycle-");
+        prompt->setText(original);
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "e " + m_directory.filePath("cycle-a.pdf"));
+        QTest::keyClick(prompt, Qt::Key_P, vimControl);
+        QCOMPARE(prompt->text(), original);
+
+        prompt->setText("e ~");
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "e ~/");
+        const auto homeRelative = "~/" + QDir(QDir::homePath()).relativeFilePath(m_pdf);
+        prompt->setText("e " + homeRelative.left(homeRelative.size() - 4));
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "e " + homeRelative);
+        QTest::keyClick(prompt, Qt::Key_J, vimControl);
+        QCOMPARE(window.bufferCount(), 1); // Expanded home path finds the same buffer.
+        QVERIFY(!prompt->isVisible());
+        QTest::keyClicks(view, ":");
+        prompt->setText("e \"" + m_other.left(m_other.size() - 4));
+        QTest::keyClick(prompt, Qt::Key_Tab);
+        QCOMPARE(prompt->text(), "e \"" + m_other + '"');
+        QTest::keyClick(prompt, Qt::Key_Return);
+        QCOMPARE(window.bufferCount(), 2);
+    }
+    void directoryCommandsBrowseExpandedHome() {
+        MainWindow window;
+        window.show();
+        QString displayedDirectory;
+        QTimer closer;
+        closer.setInterval(10);
+        connect(&closer, &QTimer::timeout, &window, [&] {
+            if (auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+                displayedDirectory = dialog->directory().absolutePath();
+                dialog->reject();
+                closer.stop();
+            }
+        });
+        closer.start();
+        QVERIFY(!window.executeCommand("e ~")); // Cancel the picker; don't open a document.
+        closer.stop();
+        QCOMPARE(displayedDirectory, QDir::homePath());
+        QCOMPARE(window.bufferCount(), 0);
     }
     void buffersKeepIndependentState() {
         MainWindow window;
@@ -231,10 +389,11 @@ private slots:
             window.close();
         }
         MainWindow restored;
-        restored.show();
         restored.restoreSession();
-        QTest::qWait(50);
         QCOMPARE(restored.bufferCount(), 1);
+        QCOMPARE(restored.reader()->currentPage(), 1);
+        restored.show();
+        QTest::qWait(50);
         QCOMPARE(restored.reader()->currentPage(), 1);
         restored.reader()->jump(0);
         QTest::keyClicks(restored.reader(), "'a");
@@ -277,7 +436,8 @@ private slots:
         QTest::mouseMove(view->viewport(), end, 20);
         QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, end);
         QVERIFY(!view->selectedText().isEmpty());
-        view->copySelection();
+        QApplication::clipboard()->clear();
+        QTest::keyClick(view, Qt::Key_C, Qt::ControlModifier); // native copy, including Command+C on macOS
         QCOMPARE(QApplication::clipboard()->text(), view->selectedText());
         view->clearSelection();
         QVERIFY(view->selectedText().isEmpty());
@@ -318,6 +478,33 @@ private slots:
         view->search("attention", true);
         QTRY_COMPARE_WITH_TIMEOUT(view->matchCount(), 3, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(view->matchIndex() >= 0, 3000);
+    }
+    void visibleRastersSettle() {
+        QPdfDocument document;
+        QCOMPARE(document.load(m_pdf), QPdfDocument::Error::None);
+        ReaderView view(&document);
+        view.resize(2300, 1450);
+        auto *renderer = view.findChild<QPdfPageRenderer *>();
+        QVERIFY(renderer);
+        QSignalSpy frames(renderer, &QPdfPageRenderer::pageRendered);
+        view.show();
+        view.setZoom(2.5);
+        view.verticalScrollBar()->setValue(qRound(view.pageRect(0).bottom() - view.viewport()->height() / 2));
+        // On Retina these two rasters used to evict each other from the 48MiB
+        // cache forever. Once settled, idle viewing must schedule no more work.
+        QTRY_VERIFY_WITH_TIMEOUT(frames.size() >= 2, 5000);
+        QTest::qWait(800);
+        const auto settled = frames.size();
+        QTest::qWait(400);
+        QCOMPARE(frames.size(), settled);
+        view.viewport()->update();
+        QTest::qWait(200);
+        QCOMPARE(frames.size(), settled);
+        view.setZoom(2.0);
+        QTest::qWait(800);
+        const auto resized = frames.size();
+        QTest::qWait(400);
+        QCOMPARE(frames.size(), resized);
     }
     void demoAndScreenshots() {
         const auto path = m_directory.filePath("Ivia field notes.pdf");

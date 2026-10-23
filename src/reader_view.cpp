@@ -17,6 +17,10 @@ namespace ivia {
 namespace {
 constexpr int margin = 40;
 constexpr int gap = 24;
+// All visible full-page rasters must coexist in the cache. A per-page cap is
+// insufficient: two large pages would otherwise evict and rerender each other.
+constexpr qreal visibleRasterBytes = 36.0 * 1024 * 1024;
+constexpr qreal previousRasterPixels = 512.0 * 1024;
 QString rasterKey(int page, QSize size)
 {
     return QStringLiteral("%1:%2:%3").arg(page).arg(size.width()).arg(size.height());
@@ -32,6 +36,7 @@ ReaderView::ReaderView(QPdfDocument *document, QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
     viewport()->setMouseTracking(true);
     setMouseTracking(true);
     m_renderer->setRenderMode(QPdfPageRenderer::RenderMode::MultiThreaded);
@@ -41,9 +46,27 @@ ReaderView::ReaderView(QPdfDocument *document, QWidget *parent)
                    QPdfDocumentRenderOptions, quint64) {
         const QString key = rasterKey(page, size);
         m_pending.remove(key);
-        if (!image.isNull())
-            m_cache.insert(key, new QImage(image), int(image.sizeInBytes() / 1024 + 1));
-        viewport()->update();
+        // An old zoom/viewport request must not evict the current view's images.
+        if (m_rasterTargets.value(page) == size) {
+            if (image.isNull()) {
+                // A corrupt page must not trigger an endless repaint/retry loop.
+                m_failedRasters.insert(key);
+            } else {
+                m_cache.insert(key, new QImage(image), int(image.sizeInBytes() / 1024 + 1));
+                const qreal previewScale = std::min({1.0,
+                    2048.0 / std::max(image.width(), image.height()),
+                    std::sqrt(previousRasterPixels / (qreal(image.width()) * image.height()))});
+                const auto previewSize = QSize(std::max(1, int(image.width() * previewScale)),
+                                               std::max(1, int(image.height() * previewScale)));
+                auto *preview = new QImage(image.scaled(previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                m_previousRasters.insert(page, preview, int(preview->sizeInBytes() / 1024 + 1));
+                const QPoint offset(horizontalScrollBar()->value(), verticalScrollBar()->value());
+                viewport()->update(pageRect(page).translated(-offset).toAlignedRect());
+            }
+        }
+        // Obsolete requests still free worker capacity. Start the latest visible
+        // work immediately without repainting solely for a discarded result.
+        requestVisibleRasters();
     });
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
         if (m_hinting) cancelHints();
@@ -197,6 +220,17 @@ void ReaderView::setDark(bool dark)
     viewport()->update();
 }
 
+void ReaderView::requestVisibleRasters()
+{
+    for (auto target = m_rasterTargets.cbegin(); target != m_rasterTargets.cend(); ++target) {
+        if (m_pending.size() >= 4) break;
+        const auto key = rasterKey(target.key(), target.value());
+        if (m_cache.contains(key) || m_pending.contains(key) || m_failedRasters.contains(key)) continue;
+        m_pending.insert(key);
+        m_renderer->requestPage(target.key(), target.value());
+    }
+}
+
 void ReaderView::paintEvent(QPaintEvent *)
 {
     QPainter painter(viewport());
@@ -204,21 +238,42 @@ void ReaderView::paintEvent(QPaintEvent *)
     painter.fillRect(viewport()->rect(), colors.canvas);
     const QPointF offset(horizontalScrollBar()->value(), verticalScrollBar()->value());
     const QRectF visible(offset, viewport()->size());
+    QHash<int, QSize> targets;
+    qreal totalPixels = 0;
+    for (int page = 0; page < m_pages.size(); ++page) {
+        const auto rect = m_pages.at(page);
+        if (!rect.intersects(visible) || rect.isEmpty()) continue;
+        qreal scale = std::min(devicePixelRatioF(), 2.0);
+        scale = std::min(scale, 6000.0 / std::max(rect.width(), rect.height()));
+        scale = std::min(scale, std::sqrt(12e6 / (rect.width() * rect.height())));
+        const QSize size = (rect.size() * scale).toSize().expandedTo(QSize(1, 1));
+        targets.insert(page, size);
+        totalPixels += qreal(size.width()) * size.height();
+    }
+    // Leave room for cache accounting and previously visited pages. Round down
+    // so the aggregate remains within this budget at every device pixel ratio.
+    const qreal budgetPixels = std::max(1.0, (visibleRasterBytes - targets.size() * 1024.0) / 4.0);
+    const qreal sharedScale = totalPixels > budgetPixels ? std::sqrt(budgetPixels / totalPixels) : 1.0;
+    QSet<QString> activeKeys;
+    for (auto target = targets.begin(); target != targets.end(); ++target) {
+        target.value() = QSize(std::max(1, int(target->width() * sharedScale)),
+                               std::max(1, int(target->height() * sharedScale)));
+        activeKeys.insert(rasterKey(target.key(), target.value()));
+    }
+    m_rasterTargets = std::move(targets);
+    m_failedRasters.intersect(activeKeys);
     painter.translate(-offset);
     for (int page = 0; page < m_pages.size(); ++page) {
         const auto rect = m_pages.at(page);
         if (!rect.intersects(visible)) continue;
         painter.fillRect(rect, Qt::white);
-        qreal rasterScale = std::min(devicePixelRatioF(), 2.0);
-        rasterScale = std::min(rasterScale, 6000.0 / std::max(rect.width(), rect.height()));
-        rasterScale = std::min(rasterScale, std::sqrt(12e6 / (rect.width() * rect.height())));
-        const QSize size = (rect.size() * rasterScale).toSize().expandedTo(QSize(1, 1));
-        const auto key = rasterKey(page, size);
+        const auto key = rasterKey(page, m_rasterTargets.value(page));
         if (const auto image = m_cache.object(key)) {
             painter.drawImage(rect, *image);
-        } else if (!m_pending.contains(key) && m_pending.size() < 4) {
-            m_pending.insert(key);
-            m_renderer->requestPage(page, size);
+        } else if (const auto previous = m_previousRasters.object(page)) {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            painter.drawImage(rect, *previous);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
         }
         painter.save();
         painter.translate(rect.topLeft());
@@ -244,6 +299,7 @@ void ReaderView::paintEvent(QPaintEvent *)
         }
         painter.restore();
     }
+    requestVisibleRasters();
     if (m_hinting) {
         painter.setFont(QFont("monospace", 11, QFont::DemiBold));
         for (const auto &hint : m_hints) {

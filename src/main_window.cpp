@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "command.h"
+#include "command_line.h"
 #include "theme.h"
 #include <QAction>
 #include <QApplication>
@@ -173,13 +174,13 @@ void MainWindow::buildUi()
     // command must not resize the PDF viewport or move the reading position.
     m_promptBar = new QFrame(central);
     m_promptBar->setObjectName("promptBar");
-    m_promptBar->setFixedHeight(36);
+    m_promptBar->setFixedHeight(22);
     auto *promptRow = new QHBoxLayout(m_promptBar);
-    promptRow->setContentsMargins(12, 0, 12, 0);
-    promptRow->setSpacing(6);
+    promptRow->setContentsMargins(2, 0, 2, 0);
+    promptRow->setSpacing(0);
     m_promptPrefix = new QLabel(":");
     m_promptPrefix->setObjectName("promptPrefix");
-    m_prompt = new QLineEdit;
+    m_prompt = new CommandLine;
     m_prompt->setObjectName("commandLine");
     m_prompt->setFrame(false);
     m_prompt->setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -188,6 +189,19 @@ void MainWindow::buildUi()
     promptRow->addWidget(m_prompt, 1);
     connect(m_prompt, &QLineEdit::returnPressed, this, &MainWindow::submitPrompt);
     m_promptBar->hide();
+    m_completionLabel = new QLabel(central);
+    m_completionLabel->setObjectName("completionList");
+    m_completionLabel->setTextFormat(Qt::PlainText);
+    m_completionLabel->setWordWrap(true);
+    m_completionLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_completionLabel->hide();
+    connect(m_prompt, &CommandLine::cancelRequested, this, &MainWindow::leavePrompt);
+    connect(m_prompt, &CommandLine::completionRequested, this, &MainWindow::completePrompt);
+    connect(m_prompt, &CommandLine::completionListRequested, this, &MainWindow::listPromptCompletions);
+    connect(m_prompt, &CommandLine::allCompletionsRequested, this, &MainWindow::insertAllCompletions);
+    connect(m_prompt, &CommandLine::longestCompletionRequested, this, &MainWindow::longestCompletion);
+    connect(m_prompt, &CommandLine::historyRequested, this, &MainWindow::recallPrompt);
+    connect(m_prompt, &QLineEdit::textChanged, m_completionLabel, &QWidget::hide);
 
     m_messageLabel = new QLabel(central);
     m_messageLabel->setObjectName("notice");
@@ -244,10 +258,11 @@ void MainWindow::applyTheme()
         #brand { font-family: Georgia; font-size: 38px; color: %5; }
         #welcomeOpen { color: %1; }
         #welcomeHint { color: %2; font-size: 11px; }
-        #promptBar { background: %8; border: 0; border-radius: 0; }
-        #promptPrefix, #commandLine { font-family: Menlo, Consolas, monospace; font-size: 13px; background: transparent; border: 0; }
-        #promptPrefix { color: %9; }
-        #commandLine { color: %9; selection-background-color: #dddddd; selection-color: #000000; }
+        #promptBar { background: %6; border: 0; border-radius: 0; }
+        #promptPrefix, #commandLine, #completionList { padding: 0; margin: 0; font-family: Menlo, Consolas, monospace; font-size: 13px; background: transparent; border: 0; }
+        #promptPrefix { color: %1; }
+        #completionList { color: %1; background: %6; border: 0; padding: 2px; }
+        #commandLine { color: %1; selection-background-color: #dddddd; selection-color: #000000; }
         #notice { background: %8; color: %9; border: 0; border-radius: 0; padding: 7px 11px; font-size: 11px; }
         #pendingKeys { background: %8; color: %9; border-radius: 0; padding: 5px 9px; font-family: Menlo, Consolas, monospace; font-size: 11px; }
         #panel { background: %3; border-right: 1px solid %4; }
@@ -276,13 +291,21 @@ QString MainWindow::baseDirectory() const
 
 void MainWindow::chooseFile()
 {
-    const auto paths = QFileDialog::getOpenFileNames(this, "Open papers", baseDirectory(), "PDF documents (*.pdf)");
-    for (const auto &path : paths) openFile(path);
+    chooseFiles(baseDirectory());
+}
+
+bool MainWindow::chooseFiles(const QString &directory)
+{
+    const auto paths = QFileDialog::getOpenFileNames(this, "Open papers", directory, "PDF documents (*.pdf)");
+    bool opened = false;
+    for (const auto &path : paths) opened = openFile(path) || opened;
+    return opened;
 }
 
 bool MainWindow::openFile(const QString &input)
 {
     const QFileInfo info(expandPath(input, baseDirectory()));
+    if (info.isDir()) return chooseFiles(info.absoluteFilePath());
     if (!info.exists() || !info.isFile()) { showMessage("File not found: " + input); return false; }
     const QString path = info.canonicalFilePath();
     for (int i = 0; i < bufferCount(); ++i) {
@@ -326,7 +349,7 @@ bool MainWindow::openFile(const QString &input)
         if (it.key().size() == 1) buffer()->marks[it.key().at(0)] = decodeLocation(it.value().toObject());
     if (state.contains("location")) {
         const auto location = decodeLocation(state["location"].toObject());
-        QTimer::singleShot(0, view, [view, location] { view->restore(location); });
+        view->restore(location);
     }
     if (!m_restoring) saveSession();
     return true;
@@ -417,18 +440,19 @@ void MainWindow::positionOverlays()
 {
     const QRect bounds = centralWidget()->rect();
     constexpr int inset = 16;
-    m_promptBar->setGeometry(inset, bounds.height() - inset - m_promptBar->height(),
-                            std::min(580, bounds.width() - inset * 2), m_promptBar->height());
-    m_promptBar->raise();
+    m_promptBar->setGeometry(0, bounds.height() - m_promptBar->height(), bounds.width(), m_promptBar->height());
+    m_completionLabel->setFixedWidth(bounds.width());
+    const int completionHeight = std::min(bounds.height() / 3,
+        std::max(26, m_completionLabel->heightForWidth(bounds.width())));
+    m_completionLabel->setGeometry(0, m_promptBar->y() - completionHeight, bounds.width(), completionHeight);
     m_messageLabel->setMaximumWidth(bounds.width() - inset * 2);
     m_messageLabel->adjustSize();
     m_messageLabel->move(inset, bounds.height() - inset - m_messageLabel->height()
-                         - (m_promptBar->isVisible() ? m_promptBar->height() + 8 : 0));
-    m_messageLabel->raise();
+                         - (m_promptBar->isVisible() ? m_promptBar->height() + 8 : 0)
+                         - (m_completionLabel->isVisible() ? m_completionLabel->height() : 0));
     m_pendingLabel->adjustSize();
     m_pendingLabel->move(bounds.width() - inset - m_pendingLabel->width(),
                          bounds.height() - inset - m_pendingLabel->height());
-    m_pendingLabel->raise();
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -440,17 +464,18 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 void MainWindow::updateStatus()
 {
     const auto keys = m_count + m_pending;
+    const bool pendingChanged = m_pendingLabel->text() != keys;
     m_pendingLabel->setText(keys);
-    m_pendingLabel->setVisible(!keys.isEmpty());
+    m_pendingLabel->setVisible(!keys.isEmpty() && m_promptKind.isNull());
     if (buffer()) {
         QString title = QString("%1 — %2/%3 — Ivia")
                 .arg(QFileInfo(buffer()->path).fileName()).arg(reader()->currentPage() + 1)
                 .arg(buffer()->document->pageCount());
         if (!reader()->searchText().isEmpty())
             title.prepend(QString("%1/%2 matches — ").arg(reader()->matchIndex() + 1).arg(reader()->matchCount()));
-        setWindowTitle(title);
+        if (windowTitle() != title) setWindowTitle(title);
     } else setWindowTitle("Ivia");
-    positionOverlays();
+    if (pendingChanged) positionOverlays();
 }
 
 void MainWindow::showMessage(const QString &message)
@@ -459,6 +484,7 @@ void MainWindow::showMessage(const QString &message)
         message, Qt::ElideRight, std::max(160, centralWidget()->width() - 60)));
     m_messageLabel->setToolTip(message);
     m_messageLabel->show();
+    m_messageLabel->raise();
     positionOverlays();
     m_messageTimer.start(3500);
 }
@@ -478,7 +504,10 @@ void MainWindow::enterPrompt(QChar kind, QString initial)
     m_messageLabel->hide();
     m_historyIndex = m_history.size();
     m_historyDraft.clear();
+    m_completionLabel->hide();
     m_promptBar->show();
+    m_promptBar->raise();
+    positionOverlays();
     m_prompt->setFocus();
     updateStatus();
 }
@@ -487,6 +516,7 @@ void MainWindow::leavePrompt()
 {
     m_promptKind = {};
     m_promptBar->hide();
+    m_completionLabel->hide();
     m_messageTimer.stop();
     m_messageLabel->hide();
     if (reader()) reader()->setFocus();
@@ -511,53 +541,124 @@ void MainWindow::submitPrompt()
     }
 }
 
+QStringList MainWindow::promptCompletions() const
+{
+    if (m_promptKind != ':') return {};
+    const auto text = m_prompt->text().left(m_prompt->cursorPosition());
+    QStringList candidates;
+    const auto separator = QRegularExpression("\\s+").match(text);
+    if (!separator.hasMatch()) {
+        for (const auto &name : commandNames()) if (name.startsWith(text)) candidates.append(name);
+        return candidates;
+    }
+    const auto command = parseCommand(text);
+    const auto prefix = text.left(separator.capturedEnd());
+    if (command.name == "e" || command.name == "edit") {
+        const auto rawArgument = text.mid(separator.capturedEnd());
+        for (const auto &path : filePathCompletions(rawArgument, baseDirectory()))
+            candidates.append(prefix + path);
+    } else if (command.name == "b" || command.name == "buffer") {
+        for (int i = 0; i < bufferCount(); ++i)
+            if (QString::number(i + 1).startsWith(command.argument)
+                    || QFileInfo(m_buffers[size_t(i)]->path).fileName().contains(command.argument, Qt::CaseInsensitive))
+                candidates.append(prefix + QString::number(i + 1));
+    }
+    return candidates;
+}
+
+void MainWindow::replacePromptCompletion(const QString &prefix)
+{
+    // Complete only the part before the cursor; keep any suffix and preserve
+    // the line editor's undo stack instead of replacing the entire input.
+    m_prompt->setSelection(0, m_prompt->cursorPosition());
+    m_prompt->insert(prefix);
+    m_prompt->setCursorPosition(prefix.size());
+    m_completionText = m_prompt->text();
+    m_completionCursor = m_prompt->cursorPosition();
+}
+
 void MainWindow::completePrompt(bool reverse)
 {
     if (m_promptKind != ':') return;
-    const auto text = m_prompt->text();
-    if (!m_completions.isEmpty() && text == m_completionText) {
+    if (!m_completions.isEmpty() && m_prompt->text() == m_completionText
+            && m_prompt->cursorPosition() == m_completionCursor) {
         const int count = m_completions.size();
-        if (m_completionIndex < 0) m_completionIndex = reverse ? count - 1 : 0;
-        else m_completionIndex = (m_completionIndex + (reverse ? count - 1 : 1)) % count;
-        m_completionText = m_completions.at(m_completionIndex);
-        m_prompt->setText(m_completionText);
+        m_completionIndex += reverse ? -1 : 1;
+        if (m_completionIndex < -1) m_completionIndex = count - 1;
+        if (m_completionIndex >= count) m_completionIndex = -1;
+        replacePromptCompletion(m_completionIndex < 0 ? m_completionOriginal : m_completions.at(m_completionIndex));
         return;
     }
-    const auto command = parseCommand(text);
-    QStringList candidates;
-    QString prefix = text;
-    if (!text.contains(' ')) {
-        for (const auto &name : commandNames()) if (name.startsWith(text)) candidates.append(name);
-    } else if (command.name == "e" || command.name == "edit") {
-        const QString path = expandPath(command.argument, baseDirectory());
-        const QFileInfo info(path);
-        QDir directory(info.absolutePath());
-        if (command.argument.endsWith('/')) directory.setPath(path);
-        const QString partial = command.argument.endsWith('/') ? QString{} : info.fileName();
-        for (const auto &entry : directory.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
-            if (entry.fileName().startsWith(partial, Qt::CaseInsensitive)
-                    && (entry.isDir() || entry.suffix().compare("pdf", Qt::CaseInsensitive) == 0))
-                candidates.append(command.name + " " + entry.absoluteFilePath() + (entry.isDir() ? "/" : ""));
-        }
-    } else if (command.name == "b" || command.name == "buffer") {
-        for (int i = 0; i < bufferCount(); ++i)
-            if (QFileInfo(m_buffers[size_t(i)]->path).fileName().contains(command.argument, Qt::CaseInsensitive))
-                candidates.append(command.name + " " + QString::number(i + 1));
-    }
+    const auto candidates = promptCompletions();
     if (candidates.isEmpty()) { showMessage("No completions"); return; }
-    // A completed directory should descend on the next Tab, not repeatedly
-    // complete itself. Keep a cycle only when there is a real choice.
     m_completions = candidates.size() > 1 ? candidates : QStringList{};
+    m_completionOriginal = m_prompt->text().left(m_prompt->cursorPosition());
     m_completionIndex = -1;
-    prefix = candidates.first();
+    auto prefix = candidates.first();
     for (const auto &candidate : candidates)
         while (!candidate.startsWith(prefix) && !prefix.isEmpty()) prefix.chop(1);
-    if (prefix.size() <= text.size() || candidates.size() == 1) {
+    if (prefix.size() <= m_prompt->cursorPosition() || candidates.size() == 1) {
         m_completionIndex = reverse ? candidates.size() - 1 : 0;
         prefix = candidates.at(m_completionIndex);
     }
-    m_completionText = prefix;
-    m_prompt->setText(prefix);
+    replacePromptCompletion(prefix);
+}
+
+void MainWindow::listPromptCompletions()
+{
+    const auto candidates = promptCompletions();
+    if (candidates.isEmpty()) { showMessage("No completions"); return; }
+    QStringList display = candidates.mid(0, 50);
+    if (candidates.size() > 50) display.append(QString("… %1 more").arg(candidates.size() - 50));
+    m_messageTimer.stop();
+    m_messageLabel->hide();
+    m_completionLabel->setText(display.join("    "));
+    m_completionLabel->show();
+    m_completionLabel->raise();
+    positionOverlays();
+}
+
+void MainWindow::insertAllCompletions()
+{
+    auto candidates = promptCompletions();
+    if (candidates.isEmpty()) return;
+    const auto before = m_prompt->text().left(m_prompt->cursorPosition());
+    const auto separator = QRegularExpression("\\s+").match(before);
+    QString prefix;
+    if (separator.hasMatch()) {
+        prefix = before.left(separator.capturedEnd());
+        for (auto &candidate : candidates) candidate.remove(0, prefix.size());
+    }
+    replacePromptCompletion(prefix + candidates.join(' '));
+    m_completions.clear();
+}
+
+void MainWindow::longestCompletion()
+{
+    const auto candidates = promptCompletions();
+    if (candidates.isEmpty()) return;
+    auto prefix = candidates.first();
+    for (const auto &candidate : candidates)
+        while (!candidate.startsWith(prefix) && !prefix.isEmpty()) prefix.chop(1);
+    if (prefix.size() > m_prompt->cursorPosition()) replacePromptCompletion(prefix);
+}
+
+void MainWindow::recallPrompt(int direction, bool cycleCompletion)
+{
+    if (cycleCompletion && !m_completions.isEmpty() && m_prompt->text() == m_completionText
+            && m_prompt->cursorPosition() == m_completionCursor) {
+        completePrompt(direction < 0);
+        return;
+    }
+    if (m_historyIndex == m_history.size()) m_historyDraft = m_prompt->text();
+    int next = m_historyIndex + direction;
+    while (next >= 0 && next < m_history.size() && !m_history.at(next).startsWith(m_promptKind)) next += direction;
+    if (next >= 0 && next <= m_history.size()) {
+        m_historyIndex = next;
+        m_prompt->setText(next == m_history.size() ? m_historyDraft : m_history.at(next).mid(1));
+        m_completions.clear();
+        m_completionLabel->hide();
+    }
 }
 
 bool MainWindow::executeCommand(const QString &text)
@@ -642,7 +743,7 @@ bool MainWindow::executeCommand(const QString &text)
         m_stack->removeWidget(previousView);
         delete previousView;
         delete previousDocument;
-        QTimer::singleShot(0, view, [view, location] { view->restore(location); });
+        view->restore(location);
         showMessage("PDF reloaded");
         return true;
     }
@@ -670,25 +771,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event)
     if (!widget || widget->window() != this || QApplication::activeModalWidget())
         return QMainWindow::eventFilter(object, event);
     auto *key = static_cast<QKeyEvent *>(event);
-    if (object == m_prompt) {
-        if (key->key() == Qt::Key_Escape) { leavePrompt(); return true; }
-        if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
-            completePrompt(key->key() == Qt::Key_Backtab || key->modifiers().testFlag(Qt::ShiftModifier));
-            return true;
-        }
-        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
-            if (m_historyIndex == m_history.size()) m_historyDraft = m_prompt->text();
-            const int direction = key->key() == Qt::Key_Up ? -1 : 1;
-            int next = m_historyIndex + direction;
-            while (next >= 0 && next < m_history.size() && !m_history.at(next).startsWith(m_promptKind)) next += direction;
-            if (next >= 0 && next <= m_history.size()) {
-                m_historyIndex = next;
-                m_prompt->setText(next == m_history.size() ? m_historyDraft : m_history.at(next).mid(1));
-            }
-            return true;
-        }
-        return false;
-    }
+    if (m_promptBar->isVisible()) return false; // Never interpret propagated editing keys as reader commands.
     if (object == m_panelTree && key->key() == Qt::Key_Escape) {
         m_panel->hide(); if (reader()) reader()->setFocus(); return true;
     }
@@ -715,13 +798,11 @@ void MainWindow::normalKey(QKeyEvent *event)
     }
     const auto modifiers = event->modifiers();
     if (modifiers & Qt::AltModifier) return;
-    if (modifiers & (Qt::ControlModifier | Qt::MetaModifier)) {
+    if (view && event->matches(QKeySequence::Copy)) {
+        view->copySelection(); accept(); return;
+    }
+    if (CommandLine::physicalControl(modifiers)) {
         const int key = event->key();
-        if (key == Qt::Key_O && (modifiers & Qt::ControlModifier)) {
-#ifdef Q_OS_MACOS
-            return; // Qt maps Command to Control on macOS; native Open handles it.
-#endif
-        }
         if (!view) return;
         int count = m_count.isEmpty() ? 1 : m_count.toInt();
         bool handled = true;
@@ -737,6 +818,7 @@ void MainWindow::normalKey(QKeyEvent *event)
         if (handled) { resetPending(); accept(); }
         return;
     }
+    if (modifiers & (Qt::ControlModifier | Qt::MetaModifier)) return;
     const QString text = event->text();
     if (view && view->hinting()) { if (!text.isEmpty()) view->hintKey(text); accept(); return; }
     if (text == ":" || text == "/" || text == "?") { enterPrompt(text.at(0)); accept(); return; }
@@ -927,6 +1009,15 @@ void MainWindow::showHelp()
     <tr><td><code>:set light / :set dark</code></td><td>Set the interface theme; paper retains its original colors</td></tr>
     <tr><td><code>Ctrl+G / :info</code></td><td>Briefly show filename, page and zoom</td></tr>
     <tr><td><code>:q / :qa</code></td><td>Quit, saving the reading session</td></tr></table>
+    <h2>Editing the command line</h2><table>
+    <tr><td><code>Ctrl+H / W / U</code></td><td>Backspace / delete previous word / delete before cursor</td></tr>
+    <tr><td><code>Ctrl+B / E</code></td><td>Beginning / end of line</td></tr>
+    <tr><td><code>Ctrl+D</code></td><td>List matching commands or paths without changing the input</td></tr>
+    <tr><td><code>Ctrl+A / L</code></td><td>Insert all matches / longest common completion</td></tr>
+    <tr><td><code>Ctrl+N / P</code></td><td>Cycle active completions, otherwise prompt history</td></tr>
+    <tr><td><code>Ctrl+J / M</code></td><td>Submit the command</td></tr>
+    <tr><td><code>Ctrl+C / [</code></td><td>Cancel the command</td></tr></table>
+    <p>Paths support ~/, Unix ~username, $VAR, ${VAR}, and quoted names. Use :e ~ to browse home.</p>
     <p>Tab / Shift+Tab cycle command and file completions. ↑/↓ recall prompt history. Reading positions, zoom,
     buffers and marks are restored next launch. PDFs are opened read-only.</p>
     <p>On macOS, Ctrl means the physical Control key. Command+O opens files.</p>

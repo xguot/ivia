@@ -7,22 +7,23 @@ independent document buffers, search, persistent marks, and reference jumps.
 The reading canvas uses Qt PDF directly; it does not embed a browser.
 
 There are no persistent toolbars, buffer tabs, status bars, or scrollbars. The
-default surround uses Sioyek's neutral light background, with black/white command input.
-Press `:` or `/` for a small, single-line input over the canvas; it disappears on
+default surround uses Sioyek's neutral light background. Command text sits directly
+along the bottom edge on that same background, without a box or contrasting strip.
+Press `:` or `/` for a plain, full-width line at the bottom edge; it disappears on
 Enter or Escape without resizing or moving the paper. Tab / Shift+Tab cycle
 completions in place. Contents, marks and buffer lists appear only when requested.
 Page and search information lives in the native window title; `Ctrl+G` or `:info`
 briefly shows the filename, page and zoom. Other notices also disappear automatically.
 
 The previous iris palette has been removed. Light mode takes its canvas and
-command colors from Sioyek's shipped defaults; dark mode takes its base and input
-colors from Zathura's defaults:
+base grays from Sioyek's shipped defaults; dark mode takes its base grays from
+Zathura's defaults. Command input now blends into the reading surround:
 
 | Element | Light (`:set light`) | Dark (`:set dark`) |
 | --- | --- | --- |
 | Canvas | RGB 0.97, 0.97, 0.97 (approximately `#f7f7f7`) | `#000000` |
-| Command input background | `#000000` | `#131313` |
-| Command input text | `#ffffff` | `#9fbc00` |
+| Command input background | Same as canvas | Same as canvas |
+| Command input text | `#000000` | `#dddddd` |
 
 Sources: [Sioyek prefs.config](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/prefs.config),
 [Sioyek main.cpp](https://github.com/ahrm/sioyek/blob/main/pdf_viewer/main.cpp), and
@@ -125,17 +126,41 @@ mouse back/forward buttons, and Control/Command+wheel zoom also work.
 | `:q`, `:quit`, `:qa` | Save the reading session and exit |
 
 Use Tab / Shift+Tab to cycle command, PDF path, and buffer completions. Up/Down recall prompt
-history. Paths support spaces, surrounding quotes, and `~/`; relative `:e` paths
-resolve beside the current PDF (or the working directory with no PDF open).
+history. Paths support spaces, surrounding or unfinished quotes, `~`, `~/`,
+Unix `~username`, and `$VAR` / `${VAR}`. Completion preserves the notation you typed.
+`:e ~` opens a file picker in your home directory; other directory paths work too.
+Relative `:e` paths resolve beside the current PDF (or the working directory with no PDF open).
 In panels, use `j`/`k` and Enter, or the mouse.
+
+The command line has explicit Vim editing keys on every platform, including the
+physical Control key on macOS. Native Command shortcuts and input methods remain
+available, so Command+A/C/V and composed characters such as `~` still work.
+
+| Keys while entering `:`, `/` or `?` | Action |
+| --- | --- |
+| `Ctrl+H` / Backspace | Delete backward; leave the prompt when already empty |
+| `Ctrl+W` / `Ctrl+U` | Delete the previous word / everything before the cursor |
+| `Ctrl+B` / `Ctrl+E` | Beginning / end of the line |
+| `Ctrl+D` | List command/path matches above the line without changing it (`:` only) |
+| `Ctrl+A` / `Ctrl+L` | Insert all matches / longest common completion (`:` only) |
+| `Ctrl+N` / `Ctrl+P` | Next / previous active completion, otherwise prompt history |
+| `Ctrl+J` / `Ctrl+M` | Submit the line |
+| `Ctrl+C` / `Ctrl+[` / Escape | Cancel |
+
+Ctrl+D follows [Vim's command-line semantics](https://github.com/vim/vim/blob/master/runtime/doc/cmdline.txt):
+it lists completions rather than deleting the next character. Use Delete for forward deletion.
 
 ## Reading state and implementation
 
 - Each buffer owns its PDF document, canvas, search, selection, marks, and jump
   history. Switching buffers retains their state.
 - `QPdfPageRenderer` rasterizes visible pages on a worker thread. Each buffer has
-  a bounded 48 MiB image cache. Raster dimensions are capped to bound memory at
-  extreme zoom levels. PDF text remains available for search and selection.
+  a bounded 48 MiB image cache plus at most 12 MiB of small transition previews.
+  Visible page rasters share a 36 MiB budget so they cannot evict one another and
+  cause a continuous rendering loop on Retina displays. Zoom/resize keeps a
+  previous preview visible until its sharper replacement arrives. PDF text
+  remains available for search and selection. Sessions and saved locations load
+  before the window's first frame.
 - Search is case-insensitive, literal, and incremental, scanning one page per
   event-loop turn. Changing the query cancels the previous scan. Results are
   highlighted in green/yellow-green; the active result has a fine black frame. Broad queries stop at 20,000
@@ -152,7 +177,9 @@ In panels, use `j`/`k` and Enter, or the mouse.
 
 `src/reader_view.*` handles PDF layout, rendering, selection, search, links and
 navigation. `src/main_window.*` owns buffers, UI, keyboard modes, panels and state.
-`src/command.*` parses commands and paths. `src/demo.*` generates the original
+`src/command.*` parses commands, expands paths and completes filenames;
+`src/command_line.*` handles Vim editing while preserving native input methods.
+`src/demo.*` generates the original
 four-page sample guide used by `--demo`.
 
 ## Scope of this first version
@@ -171,7 +198,8 @@ Qt Test integration tests generate their own PDF with text, an internal link, an
 outline and numbered references. They cover invalid-file recovery, buffer
 isolation, counted Vim motions, prompt history, command validation, marks and
 session restore, link hints, citation fallback, jump history, search wraparound
-and cancellation, and sample-guide generation. Tests use isolated temporary
+and cancellation, Vim command editing, home/environment/quoted paths, idle
+rendering at normal and double pixel density, and sample-guide generation. Tests use isolated temporary
 settings and run with Qt's offscreen platform.
 
 For reproducible UI captures:

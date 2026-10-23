@@ -84,6 +84,7 @@ private:
     QPdfLink linkAt(const Hit &hit) const;
     void activateLink(const QPdfLink &link, bool preview);
     void layoutPages();
+    void requestVisibleRasters();
     void selectMatch(int index);
     void selectInitialMatch();
     void searchStep();
@@ -93,7 +94,10 @@ private:
     QPdfPageRenderer *m_renderer;
     QVector<QRectF> m_pages;
     QCache<QString, QImage> m_cache{48 * 1024}; // KiB; per-document bounded raster cache.
+    QCache<int, QImage> m_previousRasters{12 * 1024}; // Small previews survive zoom/resize.
+    QHash<int, QSize> m_rasterTargets;
     QSet<QString> m_pending;
+    QSet<QString> m_failedRasters;
     qreal m_zoom = 1;
     bool m_fitWidth = true;
     bool m_dark = false;
