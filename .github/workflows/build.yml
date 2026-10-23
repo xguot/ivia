@@ -1,0 +1,21 @@
+name: Build and test
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.3'
+          arch: ${{ matrix.os == 'windows-2022' && 'win64_msvc2022_64' || matrix.os == 'macos-14' && 'clang_64' || 'gcc_64' }}
+          modules: 'qtpdf'
+          cache: true
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+        env:
+          QT_QPA_PLATFORM: offscreen

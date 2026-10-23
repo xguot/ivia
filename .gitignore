@@ -1,0 +1,5 @@
+/build*/
+/.qt/
+/.cache/
+/.DS_Store
+aqtinstall.log
